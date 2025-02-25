@@ -29,7 +29,7 @@ def get_ai_response(message):
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"OpenAI API Error: {str(e)}")
-        return "I apologize, but I'm having trouble processing your request right now."
+        return "Desculpe, estou com dificuldades para processar sua solicitação no momento."
 
 def transcribe_audio(audio_url):
     try:
@@ -39,7 +39,7 @@ def transcribe_audio(audio_url):
         
         if response.status_code != 200:
             print(f"Failed to download audio: {response.status_code}")
-            return "I couldn't process your voice message."
+            return "Não consegui processar sua mensagem de voz."
         
         # Save the audio file temporarily
         temp_file_path = "temp_audio.ogg"
@@ -63,7 +63,7 @@ def transcribe_audio(audio_url):
     
     except Exception as e:
         print(f"Transcription Error: {str(e)}")
-        return "I had trouble understanding your voice message."
+        return "Tive dificuldades para entender sua mensagem de voz."
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -88,8 +88,9 @@ def webhook():
             
             # Get AI response based on transcription
             ai_response = get_ai_response(transcribed_text)
-            response_prefix = "I heard: \"" + transcribed_text + "\"\n\nMy response: "
-            full_response = response_prefix + ai_response
+            
+            # Send only the AI response without the prefix
+            full_response = ai_response
         else:
             # Handle regular text message
             incoming_msg = request.values.get('Body', '')
@@ -108,11 +109,15 @@ def webhook():
         print(f"\n=== Error ===")
         print(f"Type: {type(e).__name__}")
         print(f"Details: {str(e)}")
-        return str(MessagingResponse())
+        
+        # Return a friendly error message in Portuguese
+        resp = MessagingResponse()
+        resp.message("Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente mais tarde.")
+        return str(resp)
 
 @app.route('/', methods=['GET'])
 def home():
-    return 'WhatsApp AI Assistant is running!'
+    return 'Assistente WhatsApp está funcionando!'
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

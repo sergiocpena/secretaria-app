@@ -5,6 +5,8 @@ import openai
 import os
 import requests
 from dotenv import load_dotenv
+import threading
+import time
 
 # Load environment variables
 load_dotenv()
@@ -15,6 +17,25 @@ app = Flask(__name__)
 # Initialize OpenAI and Twilio clients
 openai.api_key = os.getenv('OPENAI_API_KEY')
 twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
+
+def ping_self():
+    app_url = os.getenv('APP_URL', 'https://secretaria-app.onrender.com')
+    
+    while True:
+        try:
+            requests.get(app_url, timeout=5)
+            print(f"Self-ping successful at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        except Exception as e:
+            print(f"Self-ping failed: {str(e)}")
+        
+        # Sleep for 10 minutes (600 seconds)
+        time.sleep(600)
+
+# Start the self-ping in a background thread
+def start_self_ping():
+    ping_thread = threading.Thread(target=ping_self, daemon=True)
+    ping_thread.start()
+    print("Self-ping background thread started")
 
 def get_ai_response(message):
     try:
@@ -120,5 +141,10 @@ def home():
     return 'Assistente WhatsApp está funcionando!'
 
 if __name__ == '__main__':
+    # Start the self-ping background thread
+    print("\n=== Starting Server ===")
+    print("WhatsApp AI Assistant is ready to respond to text and voice messages!")
+    start_self_ping()
+    
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)

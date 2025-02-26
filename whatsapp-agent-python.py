@@ -7,6 +7,7 @@ import requests
 from dotenv import load_dotenv
 import threading
 import time
+import base64
 
 # Load environment variables
 load_dotenv()
@@ -40,7 +41,7 @@ def start_self_ping():
 def get_ai_response(message):
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",  # Upgraded from gpt-3.5-turbo
             messages=[
                 {"role": "system", "content": "You are a helpful WhatsApp assistant. Be concise and friendly in your responses."},
                 {"role": "user", "content": message}
@@ -51,6 +52,44 @@ def get_ai_response(message):
     except Exception as e:
         print(f"OpenAI API Error: {str(e)}")
         return "Desculpe, estou com dificuldades para processar sua solicitação no momento."
+
+def process_image(image_url):
+    try:
+        # Download the image
+        auth = (os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
+        response = requests.get(image_url, auth=auth)
+        
+        if response.status_code != 200:
+            print(f"Failed to download image: {response.status_code}")
+            return "Não consegui baixar sua imagem."
+            
+        # Convert image to base64
+        image_base64 = base64.b64encode(response.content).decode('utf-8')
+        
+        # Send to GPT-4 Vision
+        response = openai.ChatCompletion.create(
+            model="gpt-4-vision-preview",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Descreva o que você vê nesta imagem em detalhes."},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=300
+        )
+        
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Image Processing Error: {str(e)}")
+        return "Desculpe, tive um problema ao analisar sua imagem."
 
 def transcribe_audio(audio_url):
     try:
@@ -97,8 +136,17 @@ def webhook():
         print(f"From: {sender_number}")
         print(f"Media: {num_media}")
         
+        # Check if this is an image
+        if num_media > 0 and request.values.get('MediaContentType0', '').startswith('image/'):
+            print("Image message detected")
+            image_url = request.values.get('MediaUrl0', '')
+            print(f"Image URL: {image_url}")
+            
+            # Process the image with GPT-4 Vision
+            full_response = process_image(image_url)
+            
         # Check if this is a voice message
-        if num_media > 0 and request.values.get('MediaContentType0', '').startswith('audio/'):
+        elif num_media > 0 and request.values.get('MediaContentType0', '').startswith('audio/'):
             print("Voice message detected")
             audio_url = request.values.get('MediaUrl0', '')
             print(f"Audio URL: {audio_url}")
@@ -108,10 +156,8 @@ def webhook():
             print(f"Transcription: {transcribed_text}")
             
             # Get AI response based on transcription
-            ai_response = get_ai_response(transcribed_text)
+            full_response = get_ai_response(transcribed_text)
             
-            # Send only the AI response without the prefix
-            full_response = ai_response
         else:
             # Handle regular text message
             incoming_msg = request.values.get('Body', '')

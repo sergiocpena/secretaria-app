@@ -66,9 +66,9 @@ def process_image(image_url):
         # Convert image to base64
         image_base64 = base64.b64encode(response.content).decode('utf-8')
         
-        # Send to GPT-4 Vision
+        # Send to GPT-4o (which has vision capabilities)
         response = openai.ChatCompletion.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4o",  # Updated from gpt-4-vision-preview to gpt-4o
             messages=[
                 {
                     "role": "user",
@@ -142,7 +142,7 @@ def webhook():
             image_url = request.values.get('MediaUrl0', '')
             print(f"Image URL: {image_url}")
             
-            # Process the image with GPT-4 Vision
+            # Process the image with GPT-4o
             full_response = process_image(image_url)
             
         # Check if this is a voice message

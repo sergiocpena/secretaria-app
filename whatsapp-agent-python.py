@@ -973,27 +973,39 @@ def check_and_send_reminders():
         
         # Obter a data e hora atual em UTC
         now = datetime.now(timezone.utc)
+        # Truncate seconds for comparison
+        now_truncated = now.replace(second=0, microsecond=0)
         
         # Buscar lembretes ativos que estão programados para antes ou no horário atual
         result = supabase.table('reminders') \
             .select('*') \
             .eq('is_active', True) \
-            .lte('scheduled_time', now.isoformat()) \
             .execute()
         
         reminders = result.data
-        logger.info(f"Found {len(reminders)} pending reminders")
+        logger.info(f"Found {len(reminders)} active reminders")
+        
+        # Filter reminders manually to ignore seconds
+        pending_reminders = []
+        for reminder in reminders:
+            scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+            # Truncate seconds for comparison
+            scheduled_time_truncated = scheduled_time.replace(second=0, microsecond=0)
+            if scheduled_time_truncated <= now_truncated:
+                pending_reminders.append(reminder)
+        
+        logger.info(f"Found {len(pending_reminders)} pending reminders after time comparison")
         
         sent_count = 0
         failed_count = 0
         
         # Processar cada lembrete
-        for reminder in reminders:
+        for reminder in pending_reminders:
             # Enviar a notificação
             success = send_reminder_notification(reminder)
             
             if success:
-                # Mark as inactive instead of sent since is_sent doesn't exist
+                # Mark as inactive
                 update_result = supabase.table('reminders') \
                     .update({'is_active': False}) \
                     .eq('id', reminder['id']) \
@@ -1013,12 +1025,12 @@ def check_and_send_reminders():
                 logger.warning(f"Failed to send reminder {reminder['id']}, will try again later (attempt {retry_count})")
                 failed_count += 1
         
-        # Also update check_late_reminders function
+        # Also update check_late_reminders function with similar logic
         late_results = check_late_reminders()
         
         return {
             "success": True, 
-            "processed": len(reminders),
+            "processed": len(pending_reminders),
             "sent": sent_count,
             "failed": failed_count,
             "late_processed": late_results.get("processed", 0),
@@ -1036,18 +1048,28 @@ def check_late_reminders():
     try:
         # Obter a data e hora atual em UTC
         now = datetime.now(timezone.utc)
+        # Truncate seconds
+        now_truncated = now.replace(second=0, microsecond=0)
         
         # Definir um limite de tempo para considerar um lembrete como atrasado (ex: 30 minutos)
-        late_threshold = now - timedelta(minutes=30)
+        late_threshold = now_truncated - timedelta(minutes=30)
         
-        # Buscar lembretes ativos que estão programados para antes do limite
+        # Buscar lembretes ativos
         result = supabase.table('reminders') \
             .select('*') \
             .eq('is_active', True) \
-            .lte('scheduled_time', late_threshold.isoformat()) \
             .execute()
         
-        late_reminders = result.data
+        reminders = result.data
+        
+        # Filter late reminders manually
+        late_reminders = []
+        for reminder in reminders:
+            scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+            # Truncate seconds
+            scheduled_time_truncated = scheduled_time.replace(second=0, microsecond=0)
+            if scheduled_time_truncated <= late_threshold:
+                late_reminders.append(reminder)
         
         processed = 0
         sent = 0
@@ -1066,7 +1088,7 @@ def check_late_reminders():
                 success = send_reminder_notification(reminder)
                 
                 if success:
-                    # Mark as inactive instead of sent
+                    # Mark as inactive
                     update_result = supabase.table('reminders') \
                         .update({'is_active': False, 'is_late': True}) \
                         .eq('id', reminder['id']) \

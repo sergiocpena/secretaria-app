@@ -193,17 +193,17 @@ def webhook():
             audio_url = request.values.get('MediaUrl0', '')
             print(f"Audio URL: {audio_url}")
             
-            # Store the user's audio message
-            store_conversation(
-                user_phone=user_phone,
-                message_content=audio_url,  # Store the URL of the audio
-                message_type='audio',
-                is_from_user=True
-            )
-            
             # Transcribe the audio
             transcribed_text = transcribe_audio(audio_url)
             print(f"Transcription: {transcribed_text}")
+            
+            # Store the user's transcribed audio message instead of the URL
+            store_conversation(
+                user_phone=user_phone,
+                message_content=transcribed_text,  # Store the transcription instead of URL
+                message_type='audio',
+                is_from_user=True
+            )
             
             # Get AI response based on transcription
             full_response = get_ai_response(transcribed_text)

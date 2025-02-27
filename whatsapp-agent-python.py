@@ -15,6 +15,7 @@ from datetime import datetime, timezone, timedelta
 import re
 import queue
 import logging
+import pytz
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +43,48 @@ supabase = create_client(supabase_url, supabase_key)
 message_queue = queue.Queue()
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
+
+# Defina o fuso horário do Brasil
+BRAZIL_TIMEZONE = pytz.timezone('America/Sao_Paulo')
+
+def to_local_timezone(utc_dt):
+    """Converte um datetime UTC para o fuso horário local (Brasil)"""
+    if utc_dt.tzinfo is None:
+        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+    return utc_dt.astimezone(BRAZIL_TIMEZONE)
+
+def to_utc_timezone(local_dt):
+    """Converte um datetime local para UTC"""
+    if local_dt.tzinfo is None:
+        # Assume que é horário local
+        local_dt = BRAZIL_TIMEZONE.localize(local_dt)
+    return local_dt.astimezone(timezone.utc)
+
+def format_datetime(dt, to_local=True):
+    """Formata um datetime para exibição amigável, convertendo para horário local se necessário"""
+    if to_local:
+        dt = to_local_timezone(dt)
+    
+    # Formatar a data em português
+    weekdays = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+    months = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+    
+    weekday = weekdays[dt.weekday()]
+    month = months[dt.month - 1]
+    
+    # Verificar se é hoje ou amanhã
+    now = datetime.now(dt.tzinfo)
+    if dt.date() == now.date():
+        date_str = "hoje"
+    elif dt.date() == (now + timedelta(days=1)).date():
+        date_str = "amanhã"
+    else:
+        date_str = f"{weekday}, {dt.day} de {month}"
+    
+    # Formatar a hora
+    time_str = dt.strftime("%H:%M")
+    
+    return f"{date_str} às {time_str}"
 
 # ===== RETRY MECHANISM =====
 
@@ -333,30 +376,6 @@ def parse_datetime(date_str, time_str):
         )
         return tomorrow_noon
 
-def format_datetime(dt):
-    """Formata um objeto datetime para exibição amigável"""
-    # Converter para o fuso horário local se necessário
-    if dt.tzinfo == timezone.utc:
-        # Ajustar para o fuso horário do Brasil (UTC-3)
-        dt = dt.astimezone(timezone(timedelta(hours=-3)))
-    
-    # Formatar a data
-    today = datetime.now(dt.tzinfo).date()
-    tomorrow = (datetime.now(dt.tzinfo) + timedelta(days=1)).date()
-    
-    if dt.date() == today:
-        date_str = "hoje"
-    elif dt.date() == tomorrow:
-        date_str = "amanhã"
-    else:
-        # Formatar a data em português
-        date_str = dt.strftime("%d/%m/%Y")
-    
-    # Formatar a hora
-    time_str = dt.strftime("%H:%M")
-    
-    return f"{date_str} às {time_str}"
-
 def create_reminder(user_phone, title, scheduled_time):
     """Cria um novo lembrete no Supabase"""
     try:
@@ -450,7 +469,13 @@ def check_and_send_reminders():
         
         # Obtém a hora atual em UTC
         now = datetime.now(timezone.utc)
-        logger.info(f"Checking reminders at {now.isoformat()} UTC / {to_local_timezone(now).isoformat()} local time")
+        
+        # Verificar se temos as funções de fuso horário
+        if 'to_local_timezone' in globals():
+            local_time = to_local_timezone(now).isoformat()
+            logger.info(f"Checking reminders at {now.isoformat()} UTC / {local_time} local time")
+        else:
+            logger.info(f"Checking reminders at {now.isoformat()} UTC")
         
         # Margem de 2 minutos para garantir que não perca nenhum lembrete
         time_window_start = now - timedelta(minutes=2)
@@ -471,10 +496,15 @@ def check_and_send_reminders():
             try:
                 # Converter o horário programado para exibição
                 scheduled_time_utc = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                scheduled_time_local = to_local_timezone(scheduled_time_utc)
                 
-                logger.info(f"Processing reminder: {reminder['id']} - {reminder['title']}")
-                logger.info(f"Scheduled for: {scheduled_time_utc.isoformat()} UTC / {scheduled_time_local.isoformat()} local")
+                # Verificar se temos as funções de fuso horário
+                if 'to_local_timezone' in globals():
+                    scheduled_time_local = to_local_timezone(scheduled_time_utc)
+                    logger.info(f"Processing reminder: {reminder['id']} - {reminder['title']}")
+                    logger.info(f"Scheduled for: {scheduled_time_utc.isoformat()} UTC / {scheduled_time_local.isoformat()} local")
+                else:
+                    logger.info(f"Processing reminder: {reminder['id']} - {reminder['title']}")
+                    logger.info(f"Scheduled for: {scheduled_time_utc.isoformat()} UTC")
                 
                 # Envia a notificação
                 success = send_reminder_notification(reminder)
@@ -543,40 +573,54 @@ def check_and_send_reminders():
         return {"processed": 0, "sent": 0, "errors": 1, "error_message": str(e)}
 
 def send_reminder_notification(reminder):
-    """Envia uma notificação de lembrete via sistema de retry"""
+    """Envia uma notificação de lembrete via Twilio"""
     try:
         user_phone = reminder['user_phone']
         
         # Verificar se é um lembrete atrasado
         if reminder.get('is_late'):
-            message = f"🔔 *LEMBRETE ATRASADO*: {reminder['title']}\n\n(Este lembrete estava programado para {format_datetime(datetime.fromisoformat(reminder['scheduled_time']))})"
+            # Verificar se temos as funções de fuso horário
+            if 'to_local_timezone' in globals() and 'format_datetime' in globals():
+                scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+                formatted_time = format_datetime(scheduled_time, to_local=True)
+                message = f"🔔 *LEMBRETE ATRASADO*: {reminder['title']}\n\n(Este lembrete estava programado para {formatted_time})"
+            else:
+                message = f"🔔 *LEMBRETE ATRASADO*: {reminder['title']}"
         else:
             message = f"🔔 *LEMBRETE*: {reminder['title']}"
         
         logger.info(f"Sending reminder to {user_phone}: {message}")
         
-        # Enviar diretamente via Twilio para debug
-        direct_message = twilio_client.messages.create(
-            body=message,
-            from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
-            to=f"whatsapp:{user_phone}"
-        )
+        # Garantir que o número tenha o prefixo whatsapp:
+        if not user_phone.startswith('whatsapp:'):
+            to_number = f"whatsapp:{user_phone}"
+        else:
+            to_number = user_phone
         
-        logger.info(f"Reminder sent directly via Twilio: {direct_message.sid}")
-        
-        # Também usar o sistema de retry como backup
-        send_whatsapp_message(user_phone, message)
+        # Enviar diretamente via Twilio (método mais confiável)
+        try:
+            direct_message = twilio_client.messages.create(
+                body=message,
+                from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
+                to=to_number
+            )
+            
+            logger.info(f"Reminder sent directly via Twilio: {direct_message.sid}")
+            success = True
+        except Exception as twilio_error:
+            logger.error(f"Failed to send reminder via Twilio: {str(twilio_error)}")
+            success = False
         
         # Armazenar a notificação na tabela de conversas
         store_conversation(
-            user_phone=user_phone,
+            user_phone=user_phone.replace('whatsapp:', ''),
             message_content=message,
             message_type='text',
             is_from_user=False,
             agent="REMINDER"
         )
         
-        return True
+        return success
     except Exception as e:
         logger.error(f"Error sending reminder notification: {str(e)}")
         return False

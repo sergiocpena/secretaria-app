@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import threading
 import time
 import base64
+from supabase import create_client
 
 # Load environment variables
 load_dotenv()
@@ -18,6 +19,11 @@ app = Flask(__name__)
 # Initialize OpenAI and Twilio clients
 openai.api_key = os.getenv('OPENAI_API_KEY')
 twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
+
+# Initialize Supabase client
+supabase_url = os.getenv('SUPABASE_URL')
+supabase_key = os.getenv('SUPABASE_KEY')
+supabase = create_client(supabase_url, supabase_key)
 
 def ping_self():
     app_url = os.getenv('APP_URL', 'https://secretaria-app.onrender.com')
@@ -37,6 +43,24 @@ def start_self_ping():
     ping_thread = threading.Thread(target=ping_self, daemon=True)
     ping_thread.start()
     print("Self-ping background thread started")
+
+def store_conversation(user_phone, message_content, message_type, is_from_user, agent="DEFAULT"):
+    """Store a message in the Supabase conversations table"""
+    try:
+        data = {
+            'user_phone': user_phone,
+            'message_content': message_content,
+            'message_type': message_type,
+            'is_from_user': is_from_user,
+            'agent': agent
+        }
+        
+        result = supabase.table('conversations').insert(data).execute()
+        print(f"Message stored in database: {message_type} from {'user' if is_from_user else 'agent'}")
+        return True
+    except Exception as e:
+        print(f"Error storing message in database: {str(e)}")
+        return False
 
 def get_ai_response(message):
     try:
@@ -129,6 +153,8 @@ def transcribe_audio(audio_url):
 def webhook():
     try:
         sender_number = request.values.get('From', '')
+        # Extract the phone number without the "whatsapp:" prefix
+        user_phone = sender_number.replace('whatsapp:', '')
         num_media = int(request.values.get('NumMedia', 0))
         
         # Debug logging
@@ -142,14 +168,38 @@ def webhook():
             image_url = request.values.get('MediaUrl0', '')
             print(f"Image URL: {image_url}")
             
+            # Store the user's image message
+            store_conversation(
+                user_phone=user_phone,
+                message_content=image_url,  # Store the URL of the image
+                message_type='image',
+                is_from_user=True
+            )
+            
             # Process the image with GPT-4o
             full_response = process_image(image_url)
+            
+            # Store the agent's response
+            store_conversation(
+                user_phone=user_phone,
+                message_content=full_response,
+                message_type='text',
+                is_from_user=False
+            )
             
         # Check if this is a voice message
         elif num_media > 0 and request.values.get('MediaContentType0', '').startswith('audio/'):
             print("Voice message detected")
             audio_url = request.values.get('MediaUrl0', '')
             print(f"Audio URL: {audio_url}")
+            
+            # Store the user's audio message
+            store_conversation(
+                user_phone=user_phone,
+                message_content=audio_url,  # Store the URL of the audio
+                message_type='audio',
+                is_from_user=True
+            )
             
             # Transcribe the audio
             transcribed_text = transcribe_audio(audio_url)
@@ -158,11 +208,37 @@ def webhook():
             # Get AI response based on transcription
             full_response = get_ai_response(transcribed_text)
             
+            # Store the agent's response
+            store_conversation(
+                user_phone=user_phone,
+                message_content=full_response,
+                message_type='text',
+                is_from_user=False
+            )
+            
         else:
             # Handle regular text message
             incoming_msg = request.values.get('Body', '')
             print(f"Text message: {incoming_msg}")
+            
+            # Store the user's text message
+            store_conversation(
+                user_phone=user_phone,
+                message_content=incoming_msg,
+                message_type='text',
+                is_from_user=True
+            )
+            
+            # Get AI response
             full_response = get_ai_response(incoming_msg)
+            
+            # Store the agent's response
+            store_conversation(
+                user_phone=user_phone,
+                message_content=full_response,
+                message_type='text',
+                is_from_user=False
+            )
         
         # Create Twilio response
         resp = MessagingResponse()

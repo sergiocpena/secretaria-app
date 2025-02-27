@@ -62,15 +62,21 @@ def store_conversation(user_phone, message_content, message_type, is_from_user, 
         print(f"Error storing message in database: {str(e)}")
         return False
 
-def get_ai_response(message):
+def get_ai_response(message, is_audio_transcription=False):
     try:
+        system_message = "You are a helpful WhatsApp assistant. Be concise and friendly in your responses."
+        
+        # Adicionar contexto sobre capacidade de áudio se for uma transcrição
+        if is_audio_transcription:
+            system_message += " You can process voice messages through transcription. The following message was received as an audio and transcribed to text."
+        
         response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",  # Upgraded from gpt-3.5-turbo
+            model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a helpful WhatsApp assistant. Be concise and friendly in your responses."},
+                {"role": "system", "content": system_message},
                 {"role": "user", "content": message}
             ],
-            max_tokens=150  # Limit response length
+            max_tokens=150
         )
         return response.choices[0].message.content.strip()
     except Exception as e:

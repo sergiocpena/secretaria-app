@@ -945,29 +945,20 @@ def send_direct_message():
         logger.error(f"Error in send_message endpoint: {str(e)}")
         return {"error": str(e)}, 500
 
-@app.route('/api/check-reminders', methods=['POST', 'GET'])
+@app.route('/api/check-reminders', methods=['POST'])
 def api_check_reminders():
-    """Endpoint para verificação de lembretes via cron job externo"""
+    """Endpoint para verificar e enviar lembretes pendentes"""
     try:
         # Verificar autenticação
         api_key = request.headers.get('X-API-Key')
         if api_key != os.getenv('REMINDER_API_KEY'):
-            logger.warning(f"Unauthorized attempt to access check-reminders endpoint. IP: {request.remote_addr}")
             return jsonify({"error": "Unauthorized"}), 401
-            
-        # Registrar a chamada
-        logger.info(f"Reminder check triggered via API. Time: {datetime.now(timezone.utc).isoformat()}")
         
         # Processar lembretes
         result = check_and_send_reminders()
         
-        # Retornar resultado
-        return jsonify({
-            "status": "success",
-            "processed": result.get("processed", 0),
-            "sent": result.get("sent", 0),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+        return jsonify(result)
+    
     except Exception as e:
         logger.error(f"Error in check-reminders endpoint: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -975,6 +966,121 @@ def api_check_reminders():
 @app.route('/', methods=['GET'])
 def home():
     return 'Assistente WhatsApp está funcionando!'
+
+def check_and_send_reminders():
+    """Verifica e envia lembretes pendentes"""
+    try:
+        logger.info("Checking for pending reminders...")
+        
+        # Obter a data e hora atual em UTC
+        now = datetime.now(timezone.utc)
+        
+        # Buscar lembretes ativos que estão programados para antes ou no horário atual
+        result = supabase.table('reminders') \
+            .select('*') \
+            .eq('is_active', True) \
+            .lte('scheduled_time', now.isoformat()) \
+            .execute()
+        
+        reminders = result.data
+        logger.info(f"Found {len(reminders)} pending reminders")
+        
+        # Processar cada lembrete
+        for reminder in reminders:
+            # Verificar se o lembrete já foi enviado
+            if reminder.get('is_sent'):
+                continue
+            
+            # Enviar a notificação
+            success = send_reminder_notification(reminder)
+            
+            if success:
+                # Atualizar o lembrete como enviado
+                update_result = supabase.table('reminders') \
+                    .update({'is_sent': True}) \
+                    .eq('id', reminder['id']) \
+                    .execute()
+                
+                logger.info(f"Reminder {reminder['id']} marked as sent")
+            else:
+                # Incrementar a contagem de tentativas
+                retry_count = reminder.get('retry_count', 0) + 1
+                
+                update_result = supabase.table('reminders') \
+                    .update({'retry_count': retry_count}) \
+                    .eq('id', reminder['id']) \
+                    .execute()
+                
+                logger.warning(f"Failed to send reminder {reminder['id']}, will try again later (attempt {retry_count})")
+        
+        # Verificar lembretes atrasados (não enviados após várias tentativas)
+        check_late_reminders()
+        
+        return {"success": True, "processed": len(reminders)}
+    
+    except Exception as e:
+        logger.error(f"Error checking reminders: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+def check_late_reminders():
+    """Verifica lembretes atrasados que não foram enviados após várias tentativas"""
+    try:
+        # Obter a data e hora atual em UTC
+        now = datetime.now(timezone.utc)
+        
+        # Definir um limite de tempo para considerar um lembrete como atrasado (ex: 30 minutos)
+        late_threshold = now - timedelta(minutes=30)
+        
+        # Buscar lembretes ativos, não enviados, que estão programados para antes do limite
+        result = supabase.table('reminders') \
+            .select('*') \
+            .eq('is_active', True) \
+            .eq('is_sent', False) \
+            .lte('scheduled_time', late_threshold.isoformat()) \
+            .execute()
+        
+        late_reminders = result.data
+        
+        if late_reminders:
+            logger.info(f"Found {len(late_reminders)} late reminders")
+            
+            for reminder in late_reminders:
+                # Marcar o lembrete como atrasado
+                reminder['is_late'] = True
+                
+                # Tentar enviar o lembrete atrasado
+                success = send_reminder_notification(reminder)
+                
+                if success:
+                    # Atualizar o lembrete como enviado
+                    update_result = supabase.table('reminders') \
+                        .update({'is_sent': True, 'is_late': True}) \
+                        .eq('id', reminder['id']) \
+                        .execute()
+                    
+                    logger.info(f"Late reminder {reminder['id']} marked as sent")
+                else:
+                    # Incrementar a contagem de tentativas
+                    retry_count = reminder.get('retry_count', 0) + 1
+                    
+                    # Se exceder o número máximo de tentativas, desativar o lembrete
+                    if retry_count > 5:  # Máximo de 5 tentativas
+                        update_result = supabase.table('reminders') \
+                            .update({'is_active': False, 'is_late': True, 'retry_count': retry_count}) \
+                            .eq('id', reminder['id']) \
+                            .execute()
+                        
+                        logger.warning(f"Deactivated reminder {reminder['id']} after {retry_count} failed attempts")
+                    else:
+                        update_result = supabase.table('reminders') \
+                            .update({'is_late': True, 'retry_count': retry_count}) \
+                            .eq('id', reminder['id']) \
+                            .execute()
+                        
+                        logger.warning(f"Failed to send late reminder {reminder['id']}, attempt {retry_count}")
+    
+    except Exception as e:
+        logger.error(f"Error checking late reminders: {str(e)}")
 
 if __name__ == '__main__':
     # Start background threads

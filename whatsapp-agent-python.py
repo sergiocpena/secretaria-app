@@ -422,38 +422,64 @@ def format_reminder_list(reminders):
     result += "\nPara cancelar um lembrete, envie 'cancelar lembrete [título]'"
     return result
 
-def cancel_reminder(user_phone, keywords):
-    """Cancela um lembrete baseado em palavras-chave do título"""
+def cancel_reminder(user_phone, description):
+    """Cancela um lembrete com base na descrição"""
     try:
-        # Primeiro, busca todos os lembretes ativos
-        reminders = list_reminders(user_phone)
+        # Buscar lembretes ativos do usuário
+        result = supabase.table('reminders') \
+            .select('*') \
+            .eq('user_phone', user_phone) \
+            .eq('is_active', True) \
+            .execute()
+        
+        reminders = result.data
         
         if not reminders:
-            return None
+            return "Você não tem lembretes ativos para cancelar."
         
-        # Encontra o lembrete mais provável
-        best_match = None
+        # Procurar por lembretes que correspondam à descrição
+        matching_reminders = []
         for reminder in reminders:
-            title_lower = reminder['title'].lower()
-            # Verifica se todas as palavras-chave estão no título
-            if all(keyword.lower() in title_lower for keyword in keywords):
-                best_match = reminder
-                break
+            if description.lower() in reminder['title'].lower():
+                matching_reminders.append(reminder)
         
-        if best_match:
-            # Desativa o lembrete
-            result = supabase.table('reminders') \
-                .update({'is_active': False}) \
-                .eq('id', best_match['id']) \
-                .execute()
+        if not matching_reminders:
+            return "❌ Não encontrei nenhum lembrete com essa descrição..."
+        
+        if len(matching_reminders) > 1:
+            # Se houver múltiplos lembretes correspondentes, pedir para ser mais específico
+            response = "Encontrei vários lembretes que correspondem a essa descrição. Por favor, seja mais específico ou use o número do lembrete:\n\n"
             
-            logger.info(f"Reminder cancelled: {best_match['title']}")
-            return best_match
+            for i, reminder in enumerate(matching_reminders, 1):
+                scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+                formatted_time = format_datetime(scheduled_time)
+                response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
+            
+            # Armazenar esta lista específica para referência
+            store_user_reminders_list(user_phone, matching_reminders)
+            
+            return response
         
-        return None
+        # Se chegou aqui, temos exatamente um lembrete correspondente
+        reminder = matching_reminders[0]
+        
+        # Cancelar o lembrete
+        update_result = supabase.table('reminders') \
+            .update({'is_active': False}) \
+            .eq('id', reminder['id']) \
+            .execute()
+        
+        logger.info(f"Canceled reminder {reminder['id']} for user {user_phone}")
+        
+        # Formatar a resposta
+        scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+        formatted_time = format_datetime(scheduled_time)
+        
+        return f"✅ Lembrete cancelado com sucesso:\n*{reminder['title']}* - {formatted_time}"
+        
     except Exception as e:
-        logger.error(f"Error cancelling reminder: {str(e)}")
-        return None
+        logger.error(f"Error canceling reminder: {str(e)}")
+        return "Desculpe, ocorreu um erro ao cancelar o lembrete."
 
 def check_and_send_reminders():
     """Verifica e envia lembretes programados para o momento atual, ignorando segundos"""

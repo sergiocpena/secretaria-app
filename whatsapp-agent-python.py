@@ -236,7 +236,7 @@ def detect_reminder_intent(message):
     """Detecta se a mensagem contém uma intenção de gerenciar lembretes"""
     # Palavras-chave em português para detecção rápida
     keywords = ["lembr", "alarm", "avis", "notific", "alert", "remind"]
-    list_keywords = ["meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes"]
+    list_keywords = ["lembretes", "meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes"]
     cancel_keywords = ["cancelar lembrete", "apagar lembrete", "remover lembrete", "deletar lembrete"]
     
     message_lower = message.lower()
@@ -426,10 +426,13 @@ def handle_reminder_intent(user_phone, message_text):
     """Processa intenções relacionadas a lembretes"""
     try:
         # Normalizar o texto da mensagem
-        normalized_text = message_text.lower().strip()
+        if isinstance(message_text, (list, tuple)):
+            message_text = ' '.join(str(x) for x in message_text)  # Convert list to string safely
+        normalized_text = str(message_text).lower().strip()
         
-        # Verificar se é uma solicitação para listar lembretes
-        if any(keyword in normalized_text for keyword in ["listar lembretes", "mostrar lembretes", "ver lembretes", "meus lembretes"]):
+        # Use the same list_keywords as in detect_reminder_intent
+        list_keywords = ["lembretes", "meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes"]
+        if any(keyword in normalized_text for keyword in list_keywords):
             return list_reminders(user_phone)
             
         # Verificar se é uma solicitação para cancelar um lembrete
@@ -564,6 +567,24 @@ def handle_reminder_intent(user_phone, message_text):
     except Exception as e:
         logger.error(f"Error handling reminder intent: {str(e)}")
         return "Desculpe, ocorreu um erro ao processar sua solicitação de lembrete."
+
+def process_reminder(user_phone, title, time_str):
+    """Processa a criação de um novo lembrete"""
+    try:
+        # Converter data/hora para timestamp
+        scheduled_time = parse_datetime(time_str, None)
+        
+        # Criar o lembrete
+        reminder_id = create_reminder(user_phone, title, scheduled_time)
+        
+        if reminder_id:
+            return f"✅ Lembrete criado: {title} para {format_datetime(scheduled_time)}"
+        else:
+            return "❌ Não consegui criar o lembrete. Por favor, tente novamente."
+            
+    except Exception as e:
+        logger.error(f"Error processing reminder: {str(e)}")
+        return "❌ Não consegui processar o lembrete. Por favor, tente novamente." 
 
 def send_reminder_notification(reminder):
     """Envia uma notificação de lembrete via Twilio"""
@@ -945,28 +966,6 @@ def send_direct_message():
         logger.error(f"Error in send_message endpoint: {str(e)}")
         return {"error": str(e)}, 500
 
-@app.route('/api/check-reminders', methods=['POST'])
-def api_check_reminders():
-    """Endpoint para verificar e enviar lembretes pendentes"""
-    try:
-        # Verificar autenticação
-        api_key = request.headers.get('X-API-Key')
-        if api_key != os.getenv('REMINDER_API_KEY'):
-            return jsonify({"error": "Unauthorized"}), 401
-        
-        # Processar lembretes
-        result = check_and_send_reminders()
-        
-        return jsonify(result)
-    
-    except Exception as e:
-        logger.error(f"Error in check-reminders endpoint: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/', methods=['GET'])
-def home():
-    return 'Assistente WhatsApp está funcionando!'
-
 def check_and_send_reminders():
     """Verifica e envia lembretes pendentes"""
     try:
@@ -979,18 +978,18 @@ def check_and_send_reminders():
         result = supabase.table('reminders') \
             .select('*') \
             .eq('is_active', True) \
+            .eq('is_sent', False) \
             .lte('scheduled_time', now.isoformat()) \
             .execute()
         
         reminders = result.data
         logger.info(f"Found {len(reminders)} pending reminders")
         
+        sent_count = 0
+        failed_count = 0
+        
         # Processar cada lembrete
         for reminder in reminders:
-            # Verificar se o lembrete já foi enviado
-            if reminder.get('is_sent'):
-                continue
-            
             # Enviar a notificação
             success = send_reminder_notification(reminder)
             
@@ -1002,6 +1001,7 @@ def check_and_send_reminders():
                     .execute()
                 
                 logger.info(f"Reminder {reminder['id']} marked as sent")
+                sent_count += 1
             else:
                 # Incrementar a contagem de tentativas
                 retry_count = reminder.get('retry_count', 0) + 1
@@ -1012,11 +1012,21 @@ def check_and_send_reminders():
                     .execute()
                 
                 logger.warning(f"Failed to send reminder {reminder['id']}, will try again later (attempt {retry_count})")
+                failed_count += 1
         
         # Verificar lembretes atrasados (não enviados após várias tentativas)
-        check_late_reminders()
+        late_results = check_late_reminders()
         
-        return {"success": True, "processed": len(reminders)}
+        return {
+            "success": True, 
+            "processed": len(reminders),
+            "sent": sent_count,
+            "failed": failed_count,
+            "late_processed": late_results.get("processed", 0),
+            "late_sent": late_results.get("sent", 0),
+            "late_failed": late_results.get("failed", 0),
+            "late_deactivated": late_results.get("deactivated", 0)
+        }
     
     except Exception as e:
         logger.error(f"Error checking reminders: {str(e)}")
@@ -1041,8 +1051,14 @@ def check_late_reminders():
         
         late_reminders = result.data
         
+        processed = 0
+        sent = 0
+        failed = 0
+        deactivated = 0
+        
         if late_reminders:
             logger.info(f"Found {len(late_reminders)} late reminders")
+            processed = len(late_reminders)
             
             for reminder in late_reminders:
                 # Marcar o lembrete como atrasado
@@ -1059,9 +1075,11 @@ def check_late_reminders():
                         .execute()
                     
                     logger.info(f"Late reminder {reminder['id']} marked as sent")
+                    sent += 1
                 else:
                     # Incrementar a contagem de tentativas
                     retry_count = reminder.get('retry_count', 0) + 1
+                    failed += 1
                     
                     # Se exceder o número máximo de tentativas, desativar o lembrete
                     if retry_count > 5:  # Máximo de 5 tentativas
@@ -1071,6 +1089,7 @@ def check_late_reminders():
                             .execute()
                         
                         logger.warning(f"Deactivated reminder {reminder['id']} after {retry_count} failed attempts")
+                        deactivated += 1
                     else:
                         update_result = supabase.table('reminders') \
                             .update({'is_late': True, 'retry_count': retry_count}) \
@@ -1078,16 +1097,39 @@ def check_late_reminders():
                             .execute()
                         
                         logger.warning(f"Failed to send late reminder {reminder['id']}, attempt {retry_count}")
+        
+        return {
+            "processed": processed,
+            "sent": sent,
+            "failed": failed,
+            "deactivated": deactivated
+        }
     
     except Exception as e:
         logger.error(f"Error checking late reminders: {str(e)}")
+        return {
+            "processed": 0,
+            "sent": 0,
+            "failed": 0,
+            "deactivated": 0,
+            "error": str(e)
+        }
 
-if __name__ == '__main__':
-    # Start background threads
-    logger.info("Starting WhatsApp Assistant")
-    start_self_ping()
-    start_reminder_checker()
-    message_sender_thread = start_message_sender()
+# Atualizar o endpoint para usar a função
+@app.route('/api/check-reminders', methods=['POST'])
+def api_check_reminders():
+    """Endpoint para verificar e enviar lembretes pendentes"""
+    try:
+        # Verificar autenticação
+        api_key = request.headers.get('X-API-Key')
+        if api_key != os.getenv('REMINDER_API_KEY'):
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        # Processar lembretes
+        result = check_and_send_reminders()
+        
+        return jsonify(result)
     
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    except Exception as e:
+        logger.error(f"Error in check-reminders endpoint: {str(e)}")
+        return jsonify({"error": str(e)}), 500

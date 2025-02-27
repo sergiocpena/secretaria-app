@@ -22,7 +22,7 @@ twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_T
 
 # Initialize Supabase client
 supabase_url = os.getenv('SUPABASE_URL')
-supabase_key = os.getenv('SUPABASE_KEY')
+supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # Use a chave de serviço em vez da chave anônima
 supabase = create_client(supabase_url, supabase_key)
 
 def ping_self():

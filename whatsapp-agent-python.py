@@ -441,69 +441,147 @@ def check_and_send_reminders():
     try:
         # Obtém a hora atual
         now = datetime.now(timezone.utc)
-        # Margem de 1 minuto para garantir que não perca nenhum lembrete
-        time_window = now - timedelta(minutes=1)
+        logger.info(f"Checking reminders at {now.isoformat()}")
+        
+        # Margem de 2 minutos para garantir que não perca nenhum lembrete
+        # Busca lembretes que deveriam ter sido enviados nos últimos 2 minutos
+        time_window_start = now - timedelta(minutes=2)
         
         # Busca lembretes ativos programados para agora ou no passado recente
         result = supabase.table('reminders') \
             .select('*') \
             .eq('is_active', True) \
             .lte('scheduled_time', now.isoformat()) \
-            .gt('scheduled_time', time_window.isoformat()) \
+            .gt('scheduled_time', time_window_start.isoformat()) \
             .execute()
         
         reminders = result.data
         logger.info(f"Found {len(reminders)} reminders to send")
         
         for reminder in reminders:
-            # Envia a notificação via sistema de retry
-            send_reminder_notification(reminder)
+            try:
+                # Log detalhado do lembrete
+                logger.info(f"Processing reminder: {reminder['id']} - {reminder['title']} - {reminder['scheduled_time']}")
+                
+                # Envia a notificação via sistema de retry
+                send_reminder_notification(reminder)
+                
+                # Atualiza o lembrete
+                update_result = supabase.table('reminders') \
+                    .update({
+                        'last_notification': now.isoformat(),
+                        'is_active': False  # Desativa após enviar
+                    }) \
+                    .eq('id', reminder['id']) \
+                    .execute()
+                
+                logger.info(f"Reminder {reminder['id']} marked as sent. Update result: {update_result}")
+            except Exception as e:
+                logger.error(f"Error processing reminder {reminder['id']}: {str(e)}")
+        
+        # Verificar também lembretes antigos que podem não ter sido enviados
+        # (por exemplo, se o servidor esteve offline)
+        old_result = supabase.table('reminders') \
+            .select('*') \
+            .eq('is_active', True) \
+            .lt('scheduled_time', time_window_start.isoformat()) \
+            .is_('last_notification', 'null') \
+            .execute()
+        
+        old_reminders = old_result.data
+        if old_reminders:
+            logger.warning(f"Found {len(old_reminders)} old reminders that were missed!")
             
-            # Atualiza o lembrete
-            supabase.table('reminders') \
-                .update({
-                    'last_notification': now.isoformat(),
-                    'is_active': False  # Desativa após enviar
-                }) \
-                .eq('id', reminder['id']) \
-                .execute()
-            
-            logger.info(f"Reminder {reminder['id']} marked as sent")
+            for reminder in old_reminders:
+                try:
+                    # Enviar com uma mensagem especial indicando atraso
+                    reminder['is_late'] = True
+                    send_reminder_notification(reminder)
+                    
+                    # Atualizar o status
+                    supabase.table('reminders') \
+                        .update({
+                            'last_notification': now.isoformat(),
+                            'is_active': False
+                        }) \
+                        .eq('id', reminder['id']) \
+                        .execute()
+                    
+                    logger.info(f"Late reminder {reminder['id']} processed")
+                except Exception as e:
+                    logger.error(f"Error processing late reminder {reminder['id']}: {str(e)}")
+    
     except Exception as e:
         logger.error(f"Error checking reminders: {str(e)}")
 
 def send_reminder_notification(reminder):
     """Envia uma notificação de lembrete via sistema de retry"""
-    user_phone = reminder['user_phone']
-    message = f"🔔 *LEMBRETE*: {reminder['title']}"
-    
-    # Usar o sistema de retry para enviar a mensagem
-    send_whatsapp_message(user_phone, message)
-    
-    # Armazenar a notificação na tabela de conversas
-    store_conversation(
-        user_phone=user_phone,
-        message_content=message,
-        message_type='text',
-        is_from_user=False,
-        agent="REMINDER"
-    )
+    try:
+        user_phone = reminder['user_phone']
+        
+        # Verificar se é um lembrete atrasado
+        if reminder.get('is_late'):
+            message = f"🔔 *LEMBRETE ATRASADO*: {reminder['title']}\n\n(Este lembrete estava programado para {format_datetime(datetime.fromisoformat(reminder['scheduled_time']))})"
+        else:
+            message = f"🔔 *LEMBRETE*: {reminder['title']}"
+        
+        logger.info(f"Sending reminder to {user_phone}: {message}")
+        
+        # Enviar diretamente via Twilio para debug
+        direct_message = twilio_client.messages.create(
+            body=message,
+            from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
+            to=f"whatsapp:{user_phone}"
+        )
+        
+        logger.info(f"Reminder sent directly via Twilio: {direct_message.sid}")
+        
+        # Também usar o sistema de retry como backup
+        send_whatsapp_message(user_phone, message)
+        
+        # Armazenar a notificação na tabela de conversas
+        store_conversation(
+            user_phone=user_phone,
+            message_content=message,
+            message_type='text',
+            is_from_user=False,
+            agent="REMINDER"
+        )
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error sending reminder notification: {str(e)}")
+        return False
 
 def start_reminder_checker():
     """Inicia o verificador de lembretes em uma thread separada"""
     def reminder_checker_thread():
+        logger.info("Reminder checker thread started")
+        
+        # Executar imediatamente na inicialização
+        try:
+            check_and_send_reminders()
+        except Exception as e:
+            logger.error(f"Error in initial reminder check: {str(e)}")
+        
+        # Configurar o intervalo de verificação
+        check_interval = 30  # segundos
+        
         while True:
             try:
+                # Dormir primeiro
+                time.sleep(check_interval)
+                
+                # Depois verificar os lembretes
                 check_and_send_reminders()
+                
             except Exception as e:
                 logger.error(f"Error in reminder checker: {str(e)}")
-            
-            # Verifica a cada minuto
-            time.sleep(60)
     
     thread = threading.Thread(target=reminder_checker_thread, daemon=True)
     thread.start()
     logger.info("Reminder checker background thread started")
+    return thread
 
 # ===== FIM DAS FUNÇÕES DE LEMBRETES =====
 

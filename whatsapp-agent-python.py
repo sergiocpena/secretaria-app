@@ -456,7 +456,7 @@ def cancel_reminder(user_phone, keywords):
         return None
 
 def check_and_send_reminders():
-    """Verifica e envia lembretes programados para o momento atual"""
+    """Verifica e envia lembretes programados para o momento atual, ignorando segundos"""
     try:
         # Estatísticas para retornar
         stats = {
@@ -470,6 +470,9 @@ def check_and_send_reminders():
         # Obtém a hora atual em UTC
         now = datetime.now(timezone.utc)
         
+        # Truncar a hora atual para o minuto (ignorar segundos)
+        now_truncated = now.replace(second=0, microsecond=0)
+        
         # Verificar se temos as funções de fuso horário
         if 'to_local_timezone' in globals():
             local_time = to_local_timezone(now).isoformat()
@@ -477,19 +480,23 @@ def check_and_send_reminders():
         else:
             logger.info(f"Checking reminders at {now.isoformat()} UTC")
         
-        # Margem de 2 minutos para garantir que não perca nenhum lembrete
-        time_window_start = now - timedelta(minutes=2)
+        # Buscar lembretes para o minuto atual e o minuto anterior
+        # Isso garante que não perdemos lembretes devido à diferença de segundos
+        time_window_start = now_truncated - timedelta(minutes=1)
+        time_window_end = now_truncated + timedelta(minutes=1)
         
-        # Busca lembretes ativos programados para agora ou no passado recente
+        logger.info(f"Checking reminders between {time_window_start.isoformat()} and {time_window_end.isoformat()}")
+        
+        # Busca lembretes ativos programados para o intervalo de tempo
         result = supabase.table('reminders') \
             .select('*') \
             .eq('is_active', True) \
-            .lte('scheduled_time', now.isoformat()) \
-            .gt('scheduled_time', time_window_start.isoformat()) \
+            .gte('scheduled_time', time_window_start.isoformat()) \
+            .lt('scheduled_time', time_window_end.isoformat()) \
             .execute()
         
         reminders = result.data
-        logger.info(f"Found {len(reminders)} reminders to send")
+        logger.info(f"Found {len(reminders)} reminders to send in current time window")
         stats["processed"] = len(reminders)
         
         for reminder in reminders:
@@ -528,7 +535,7 @@ def check_and_send_reminders():
                 logger.error(f"Error processing reminder {reminder['id']}: {str(e)}")
                 stats["errors"] += 1
         
-        # Verificar também lembretes antigos
+        # Verificar também lembretes antigos (mais de 1 minuto atrás)
         old_result = supabase.table('reminders') \
             .select('*') \
             .eq('is_active', True) \

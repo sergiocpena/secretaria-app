@@ -234,27 +234,29 @@ def get_ai_response(message, is_audio_transcription=False):
 
 def detect_reminder_intent(message):
     """Detecta se a mensagem contém uma intenção de gerenciar lembretes"""
-    # Palavras-chave em português para detecção rápida
-    keywords = ["lembr", "alarm", "avis", "notific", "alert", "remind"]
-    list_keywords = ["lembretes", "meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes"]
-    cancel_keywords = ["cancelar lembrete", "apagar lembrete", "remover lembrete", "deletar lembrete"]
-    
     message_lower = message.lower()
     
     # Verificação de listagem de lembretes
+    list_keywords = ["meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes", "quais são meus lembretes"]
     for keyword in list_keywords:
         if keyword in message_lower:
             return True, "listar"
     
     # Verificação de cancelamento de lembretes
+    cancel_keywords = ["cancelar lembrete", "apagar lembrete", "remover lembrete", "deletar lembrete"]
     for keyword in cancel_keywords:
         if keyword in message_lower:
             return True, "cancelar"
     
     # Verificação de criação de lembretes
-    for keyword in keywords:
+    create_keywords = ["me lembra", "me lembre", "lembre-me", "criar lembrete", "novo lembrete", "adicionar lembrete"]
+    for keyword in create_keywords:
         if keyword in message_lower:
             return True, "criar"
+    
+    # Se apenas a palavra "lembrete" ou "lembretes" estiver presente, perguntar o que o usuário deseja fazer
+    if "lembrete" in message_lower or "lembretes" in message_lower:
+        return True, "clarify"
             
     return False, None
 
@@ -532,14 +534,16 @@ def format_reminder_list(reminders):
     if not reminders:
         return "Você não tem lembretes ativos no momento."
     
-    result = "📋 *Seus lembretes:*\n\n"
+    response = "📋 *Seus lembretes:*\n"
+    
     for i, reminder in enumerate(reminders, 1):
         scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
         formatted_time = format_datetime(scheduled_time)
-        result += f"{i}. *{reminder['title']}* - {formatted_time}\n"
+        response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
     
-    result += "\nPara cancelar um lembrete, envie 'cancelar lembrete [título]'"
-    return result
+    response += "\nPara cancelar um lembrete, envie 'cancelar lembrete 2' (usando o número) ou 'cancelar lembrete [título]' (usando o nome)"
+    
+    return response
 
 def handle_reminder_intent(user_phone, message_text):
     """Processa intenções relacionadas a lembretes"""
@@ -557,53 +561,6 @@ def handle_reminder_intent(user_phone, message_text):
             reminders = list_reminders(user_phone)
             return format_reminder_list(reminders)
             
-        # Verificar se é uma solicitação para criar lembretes
-        create_keywords = ["lembrar", "lembre", "lembra", "criar lembrete", "novo lembrete"]
-        is_create_request = any(keyword in normalized_text for keyword in create_keywords)
-        
-        if is_create_request:
-            logger.info("Detected create reminder request")
-            # Extrair detalhes dos lembretes
-            reminder_data = parse_reminder(normalized_text, "criar")
-            logger.info(f"Reminder data after parsing: {reminder_data}")
-            
-            if reminder_data and "reminders" in reminder_data and reminder_data["reminders"]:
-                logger.info(f"Found {len(reminder_data['reminders'])} reminders in parsed data")
-                # Processar múltiplos lembretes
-                created_reminders = []
-                
-                for reminder in reminder_data["reminders"]:
-                    logger.info(f"Processing reminder: {reminder}")
-                    if "title" in reminder and "scheduled_time" in reminder:
-                        # Criar o lembrete
-                        reminder_id = create_reminder(user_phone, reminder["title"], reminder["scheduled_time"])
-                        logger.info(f"Created reminder with ID: {reminder_id}")
-                        
-                        if reminder_id:
-                            created_reminders.append({
-                                "title": reminder["title"],
-                                "time": reminder["scheduled_time"]
-                            })
-                        else:
-                            logger.error(f"Failed to create reminder: {reminder}")
-                
-                # Formatar resposta para múltiplos lembretes
-                if created_reminders:
-                    if len(created_reminders) == 1:
-                        reminder = created_reminders[0]
-                        return f"✅ Lembrete criado: {reminder['title']} para {format_datetime(reminder['time'])}"
-                    else:
-                        response = f"✅ {len(created_reminders)} lembretes criados:\n\n"
-                        for i, reminder in enumerate(created_reminders, 1):
-                            response += f"{i}. *{reminder['title']}* - {format_datetime(reminder['time'])}\n"
-                        return response
-                else:
-                    logger.error("Failed to create any reminders despite valid parsing")
-                    return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
-            else:
-                logger.error(f"Invalid reminder data structure: {reminder_data}")
-                return "❌ Não consegui entender os detalhes do lembrete. Por favor, tente novamente com mais informações."
-        
         # Verificar se é uma solicitação para cancelar lembretes
         cancel_keywords = ["cancelar", "remover", "apagar", "deletar"]
         is_cancel_request = any(keyword in normalized_text for keyword in cancel_keywords)
@@ -737,13 +694,60 @@ def handle_reminder_intent(user_phone, message_text):
             else:
                 return "❌ Não consegui cancelar nenhum lembrete. Por favor, verifique o número ou a descrição."
         
+        # Verificar se é uma solicitação para criar lembretes
+        create_keywords = ["lembrar", "lembre", "lembra", "criar lembrete", "novo lembrete"]
+        is_create_request = any(keyword in normalized_text for keyword in create_keywords)
+        
+        if is_create_request:
+            logger.info("Detected create reminder request")
+            # Extrair detalhes dos lembretes
+            reminder_data = parse_reminder(normalized_text, "criar")
+            logger.info(f"Reminder data after parsing: {reminder_data}")
+            
+            if reminder_data and "reminders" in reminder_data and reminder_data["reminders"]:
+                logger.info(f"Found {len(reminder_data['reminders'])} reminders in parsed data")
+                # Processar múltiplos lembretes
+                created_reminders = []
+                
+                for reminder in reminder_data["reminders"]:
+                    logger.info(f"Processing reminder: {reminder}")
+                    if "title" in reminder and "scheduled_time" in reminder:
+                        # Criar o lembrete
+                        reminder_id = create_reminder(user_phone, reminder["title"], reminder["scheduled_time"])
+                        logger.info(f"Created reminder with ID: {reminder_id}")
+                        
+                        if reminder_id:
+                            created_reminders.append({
+                                "title": reminder["title"],
+                                "time": reminder["scheduled_time"]
+                            })
+                        else:
+                            logger.error(f"Failed to create reminder: {reminder}")
+                
+                # Formatar resposta para múltiplos lembretes
+                if created_reminders:
+                    if len(created_reminders) == 1:
+                        reminder = created_reminders[0]
+                        return f"✅ Lembrete criado: {reminder['title']} para {format_datetime(reminder['time'])}"
+                    else:
+                        response = f"✅ {len(created_reminders)} lembretes criados:\n\n"
+                        for i, reminder in enumerate(created_reminders, 1):
+                            response += f"{i}. *{reminder['title']}* - {format_datetime(reminder['time'])}\n"
+                        return response
+                else:
+                    logger.error("Failed to create any reminders despite valid parsing")
+                    return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
+            else:
+                logger.error(f"Invalid reminder data structure: {reminder_data}")
+                return "❌ Não consegui entender os detalhes do lembrete. Por favor, tente novamente com mais informações."
+        
         # Se chegou aqui, não foi possível identificar a intenção específica
         logger.info(f"Reminder intent detected: {normalized_text.split()[0] if normalized_text else 'empty'}")
         return None
         
     except Exception as e:
         logger.error(f"Error handling reminder intent: {str(e)}")
-        return "Desculpe, ocorreu um erro ao processar sua solicitação de lembrete."
+        return "Desculpe, ocorreu um erro ao processar seu pedido de lembrete."
 
 def process_reminder(user_phone, title, time_str):
     """Processa a criação de um novo lembrete"""
@@ -984,90 +988,56 @@ def webhook():
             )
             
             # Check if this is a reminder intent
-            is_reminder, action = detect_reminder_intent(transcribed_text)
+            logger.info(f"Checking for reminder intent in transcribed audio: '{transcribed_text[:50]}...' (truncated)")
+            is_reminder, action = detect_reminder_intent_with_llm(transcribed_text)
             
             if is_reminder:
-                logger.info(f"Reminder intent detected: {action}")
+                logger.info(f"Reminder intent detected in audio: {action}")
                 
-                if action == "listar":
-                    # Listar lembretes
-                    reminders = list_reminders(user_phone)
-                    full_response = format_reminder_list(reminders)
+                if action == "clarify":
+                    logger.info("Sending clarification message for ambiguous reminder intent in audio")
+                    # User mentioned "lembrete" but intent is unclear
+                    full_response = "O que você gostaria de fazer com seus lembretes? Você pode:\n\n" + \
+                                    "• Ver seus lembretes (envie 'meus lembretes')\n" + \
+                                    "• Criar um lembrete (ex: 'me lembra de pagar a conta amanhã')\n" + \
+                                    "• Cancelar um lembrete (ex: 'cancelar lembrete 2')"
+                    
+                    # Store the agent's response
+                    store_conversation(
+                        user_phone=user_phone,
+                        message_content=full_response,
+                        message_type='text',
+                        is_from_user=False
+                    )
+                    
+                    # Return the response
+                    resp = MessagingResponse()
+                    resp.message(full_response)
+                    return str(resp)
                 
-                elif action == "cancelar":
-                    # Cancelar lembrete
-                    reminder_data = parse_reminder(transcribed_text, action)
-                    logger.info(f"Cancel data after parsing audio: {reminder_data}")
-                    
-                    # Handle the cancellation directly
-                    cancellation_response = handle_reminder_intent(user_phone, transcribed_text)
-                    
-                    if cancellation_response:
-                        full_response = cancellation_response
-                    else:
-                        full_response = "❌ Não consegui identificar qual lembrete você deseja cancelar."
+                # Handle the reminder intent
+                logger.info(f"Handling reminder intent: {action}")
+                start_time = time.time()
+                reminder_response = handle_reminder_intent(user_phone, transcribed_text)
+                elapsed_time = time.time() - start_time
                 
-                elif action == "criar":
-                    # Criar lembrete
-                    reminder_data = parse_reminder(transcribed_text, action)
-                    logger.info(f"Reminder data after parsing: {reminder_data}")
+                # Log the full response for debugging
+                logger.info(f"Reminder handling completed in {elapsed_time:.2f}s")
+                logger.info(f"Full reminder response: {reminder_response}")
+                
+                if reminder_response:
+                    # Store the agent's response
+                    store_conversation(
+                        user_phone=user_phone,
+                        message_content=reminder_response,
+                        message_type='text',
+                        is_from_user=False
+                    )
                     
-                    if reminder_data and "reminders" in reminder_data and reminder_data["reminders"]:
-                        logger.info(f"Found {len(reminder_data['reminders'])} reminders in parsed data")
-                        # Processar múltiplos lembretes
-                        created_reminders = []
-                        
-                        for reminder in reminder_data["reminders"]:
-                            logger.info(f"Processing reminder: {reminder}")
-                            if "title" in reminder and "datetime" in reminder:
-                                # Process datetime components
-                                dt_components = reminder["datetime"]
-                                try:
-                                    # Create datetime object from components
-                                    brazil_tz = pytz.timezone('America/Sao_Paulo')
-                                    now_local = datetime.now(brazil_tz)
-                                    
-                                    dt = datetime(
-                                        year=dt_components.get('year', now_local.year),
-                                        month=dt_components.get('month', now_local.month),
-                                        day=dt_components.get('day', now_local.day),
-                                        hour=dt_components.get('hour', 12),
-                                        minute=dt_components.get('minute', 0),
-                                        second=0,
-                                        microsecond=0
-                                    )
-                                    
-                                    # Add timezone info (Brazil)
-                                    dt = brazil_tz.localize(dt)
-                                    
-                                    # Convert to UTC
-                                    scheduled_time = dt.astimezone(timezone.utc)
-                                    
-                                    # Criar o lembrete
-                                    reminder_id = create_reminder(user_phone, reminder["title"], scheduled_time)
-                                    
-                                    if reminder_id:
-                                        created_reminders.append({
-                                            "title": reminder["title"],
-                                            "time": scheduled_time
-                                        })
-                                except Exception as e:
-                                    logger.error(f"Error processing datetime: {str(e)}")
-                        
-                        # Formatar resposta para múltiplos lembretes
-                        if created_reminders:
-                            if len(created_reminders) == 1:
-                                reminder = created_reminders[0]
-                                full_response = f"✅ Lembrete criado: {reminder['title']} para {format_datetime(reminder['time'])}"
-                            else:
-                                response = f"✅ {len(created_reminders)} lembretes criados:\n\n"
-                                for i, reminder in enumerate(created_reminders, 1):
-                                    response += f"{i}. *{reminder['title']}* - {format_datetime(reminder['time'])}\n"
-                                full_response = response
-                        else:
-                            full_response = "❌ Não consegui criar os lembretes. Por favor, tente novamente."
-                    else:
-                        full_response = "❌ Não consegui entender os detalhes do lembrete. Por favor, especifique o título e quando deseja ser lembrado."
+                    # Return the response
+                    resp = MessagingResponse()
+                    resp.message(reminder_response)
+                    return str(resp)
             else:
                 # Get AI response based on transcription
                 full_response = get_ai_response(transcribed_text, is_audio_transcription=True)
@@ -1094,15 +1064,41 @@ def webhook():
             )
             
             # Check if this is a reminder intent
-            is_reminder, action = detect_reminder_intent(incoming_msg)
+            logger.info(f"Checking for reminder intent in message: '{incoming_msg[:50]}...' (truncated)")
+            is_reminder, action = detect_reminder_intent_with_llm(incoming_msg)
             
             if is_reminder:
                 logger.info(f"Reminder intent detected: {action}")
                 
+                if action == "clarify":
+                    logger.info("Sending clarification message for ambiguous reminder intent")
+                    # User mentioned "lembrete" but intent is unclear
+                    full_response = "O que você gostaria de fazer com seus lembretes? Você pode:\n\n" + \
+                                    "• Ver seus lembretes (envie 'meus lembretes')\n" + \
+                                    "• Criar um lembrete (ex: 'me lembra de pagar a conta amanhã')\n" + \
+                                    "• Cancelar um lembrete (ex: 'cancelar lembrete 2')"
+                    
+                    # Store the agent's response
+                    store_conversation(
+                        user_phone=user_phone,
+                        message_content=full_response,
+                        message_type='text',
+                        is_from_user=False
+                    )
+                    
+                    # Return the response
+                    resp = MessagingResponse()
+                    resp.message(full_response)
+                    return str(resp)
+                
                 # Handle the reminder intent
+                logger.info(f"Handling reminder intent: {action}")
+                start_time = time.time()
                 reminder_response = handle_reminder_intent(user_phone, incoming_msg)
+                elapsed_time = time.time() - start_time
                 
                 # Log the full response for debugging
+                logger.info(f"Reminder handling completed in {elapsed_time:.2f}s")
                 logger.info(f"Full reminder response: {reminder_response}")
                 
                 if reminder_response:
@@ -1340,3 +1336,64 @@ def api_check_reminders():
     except Exception as e:
         logger.error(f"Error in check-reminders endpoint: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+def detect_reminder_intent_with_llm(message):
+    """Detecta a intenção relacionada a lembretes usando o LLM"""
+    try:
+        logger.info(f"Detecting reminder intent with LLM for message: '{message[:50]}...' (truncated)")
+        
+        system_prompt = """
+        Você é um assistente especializado em detectar intenções relacionadas a lembretes em mensagens em português.
+        
+        Analise a mensagem do usuário e identifique se ela contém uma intenção relacionada a lembretes.
+        
+        Retorne um JSON com o seguinte formato:
+        {
+          "is_reminder": true/false,
+          "intent": "criar" ou "listar" ou "cancelar" ou "clarify" ou null
+        }
+        
+        Onde:
+        - "is_reminder": indica se a mensagem contém uma intenção relacionada a lembretes
+        - "intent": o tipo específico de intenção
+          - "criar": para criar um novo lembrete
+          - "listar": para listar lembretes existentes
+          - "cancelar": para cancelar um lembrete existente
+          - "clarify": quando menciona lembretes mas a intenção não está clara
+          - null: quando não é uma intenção relacionada a lembretes
+        
+        Exemplos:
+        - "me lembra de pagar a conta amanhã" → {"is_reminder": true, "intent": "criar"}
+        - "meus lembretes" → {"is_reminder": true, "intent": "listar"}
+        - "cancelar lembrete 2" → {"is_reminder": true, "intent": "cancelar"}
+        - "lembrete" → {"is_reminder": true, "intent": "clarify"}
+        - "como está o tempo hoje?" → {"is_reminder": false, "intent": null}
+        """
+        
+        start_time = time.time()
+        response = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1
+        )
+        elapsed_time = time.time() - start_time
+        
+        result = json.loads(response.choices[0].message.content)
+        logger.info(f"LLM intent detection result: {result} (took {elapsed_time:.2f}s)")
+        
+        is_reminder = result.get("is_reminder", False)
+        intent = result.get("intent")
+        
+        logger.info(f"Intent detection result: is_reminder={is_reminder}, intent={intent}")
+        
+        return is_reminder, intent
+        
+    except Exception as e:
+        logger.error(f"Error in LLM intent detection: {str(e)}")
+        logger.info("Falling back to keyword-based detection")
+        # Fall back to keyword-based detection if LLM fails
+        return detect_reminder_intent(message)

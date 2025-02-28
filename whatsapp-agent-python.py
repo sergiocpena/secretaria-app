@@ -679,18 +679,33 @@ def handle_reminder_intent(user_phone, message_text):
             logger.info(f"Cancelled {len(cancelled_reminders)} reminders in total")
             
             if cancelled_reminders:
+                # Get the updated list of active reminders
+                remaining_reminders = list_reminders(user_phone)
+                
                 if len(cancelled_reminders) == 1:
                     reminder = cancelled_reminders[0]
                     scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
                     formatted_time = format_datetime(scheduled_time)
-                    return f"✅ Lembrete cancelado com sucesso:\n*{reminder['title']}* - {formatted_time}"
+                    response = f"🗑️ Lembrete cancelado com sucesso:\n*{reminder['title']}* - {formatted_time}\n\n"
                 else:
-                    response = f"✅ {len(cancelled_reminders)} lembretes cancelados com sucesso:\n\n"
+                    response = f"🗑️ {len(cancelled_reminders)} lembretes cancelados com sucesso:\n\n"
                     for i, reminder in enumerate(cancelled_reminders, 1):
                         scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
                         formatted_time = format_datetime(scheduled_time)
                         response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
-                    return response
+                    response += "\n"
+                
+                # Add the list of remaining reminders
+                if remaining_reminders:
+                    response += "📋 *Seus lembretes restantes:*\n"
+                    for i, reminder in enumerate(remaining_reminders, 1):
+                        scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+                        formatted_time = format_datetime(scheduled_time)
+                        response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
+                else:
+                    response += "Você não tem mais lembretes ativos."
+                
+                return response
             else:
                 return "❌ Não consegui cancelar nenhum lembrete. Por favor, verifique o número ou a descrição."
         

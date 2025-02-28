@@ -313,6 +313,7 @@ def parse_reminder(message, action):
             6. Se o usuário mencionar um dia da semana (ex: "segunda"), use a próxima ocorrência desse dia.
             7. Interprete expressões como "daqui a 2 dias" ou "em 3 horas" corretamente.
             8. Se o usuário mencionar múltiplos lembretes, inclua cada um como um item separado no array "reminders".
+            9. IMPORTANTE: Tente evitar criar lembretes no passado. Se o usuário pedir um lembrete para um horário que já passou hoje, assuma que é para amanhã.
             """
         elif action == "cancelar":
             system_prompt = """
@@ -356,6 +357,44 @@ def parse_reminder(message, action):
         
         parsed_response = json.loads(response.choices[0].message.content)
         logger.info(f"Parsed {action} data: {parsed_response} (took {elapsed_time:.2f}s)")
+        
+        # Post-process dates to ensure they're in the future
+        if action == "criar" and "reminders" in parsed_response:
+            for reminder in parsed_response["reminders"]:
+                if "datetime" in reminder:
+                    dt_components = reminder["datetime"]
+                    
+                    # Ensure year is current or future
+                    if dt_components.get("year", current_year) < current_year:
+                        logger.info(f"Correcting past year {dt_components.get('year')} to current year {current_year}")
+                        dt_components["year"] = current_year
+                    
+                    # Create a datetime object to check if it's in the past
+                    try:
+                        dt = datetime(
+                            year=dt_components.get("year", current_year),
+                            month=dt_components.get("month", current_month),
+                            day=dt_components.get("day", current_day),
+                            hour=dt_components.get("hour", 12),
+                            minute=dt_components.get("minute", 0)
+                        )
+                        
+                        # If the datetime is in the past, adjust it
+                        if dt < now_local:
+                            logger.info(f"Detected past date: {dt}, adjusting to future")
+                            # If it's today but earlier time, move to tomorrow
+                            if dt.date() == now_local.date():
+                                dt = dt + timedelta(days=1)
+                            # If it's an earlier date this year, assume it's next year
+                            elif dt.year == current_year:
+                                dt = dt.replace(year=current_year + 1)
+                            
+                            # Update the components
+                            dt_components["year"] = dt.year
+                            dt_components["month"] = dt.month
+                            dt_components["day"] = dt.day
+                    except Exception as e:
+                        logger.error(f"Error post-processing date: {str(e)}")
         
         return parsed_response
         
@@ -797,6 +836,7 @@ def handle_reminder_intent(user_phone, message_text):
                 logger.info(f"Found {len(reminder_data['reminders'])} reminders in parsed data")
                 # Processar múltiplos lembretes
                 created_reminders = []
+                invalid_reminders = []
                 
                 for reminder in reminder_data["reminders"]:
                     logger.info(f"Processing reminder: {reminder}")
@@ -821,6 +861,16 @@ def handle_reminder_intent(user_phone, message_text):
                             # Add timezone info (Brazil)
                             dt = brazil_tz.localize(dt)
                             
+                            # Check if the reminder is in the past
+                            if dt < now_local:
+                                logger.warning(f"Attempted to create reminder in the past: {reminder['title']} at {dt}")
+                                invalid_reminders.append({
+                                    "title": reminder["title"],
+                                    "time": dt,
+                                    "reason": "past"
+                                })
+                                continue
+                            
                             # Convert to UTC
                             scheduled_time = dt.astimezone(timezone.utc)
                             
@@ -840,7 +890,28 @@ def handle_reminder_intent(user_phone, message_text):
                 
                 # Formatar resposta para múltiplos lembretes
                 if created_reminders:
-                    return format_created_reminders(created_reminders)
+                    response = format_created_reminders(created_reminders)
+                    
+                    # Add warning about invalid reminders if any
+                    if invalid_reminders:
+                        past_reminders = [r for r in invalid_reminders if r.get("reason") == "past"]
+                        if past_reminders:
+                            response += "\n\n⚠️ Não foi possível criar os seguintes lembretes porque estão no passado:\n"
+                            for i, reminder in enumerate(past_reminders, 1):
+                                response += f"- *{reminder['title']}* para {format_datetime(reminder['time'])}\n"
+                    
+                    return response
+                elif invalid_reminders:
+                    # All reminders were invalid
+                    past_reminders = [r for r in invalid_reminders if r.get("reason") == "past"]
+                    if past_reminders:
+                        response = "❌ Não foi possível criar os lembretes porque estão no passado:\n\n"
+                        for i, reminder in enumerate(past_reminders, 1):
+                            response += f"{i}. *{reminder['title']}* para {format_datetime(reminder['time'])}\n"
+                        response += "\nPor favor, especifique uma data e hora no futuro."
+                        return response
+                    else:
+                        return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
                 else:
                     logger.warning("Failed to create any reminders")
                     return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
@@ -1297,9 +1368,15 @@ def check_and_send_reminders():
             scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
             # Truncate seconds for comparison
             scheduled_time_truncated = scheduled_time.replace(second=0, microsecond=0)
+            
             # Only include reminders that are due (current time >= scheduled time)
+            # Add a debug log to see the comparison
+            logger.info(f"Comparing reminder time {scheduled_time_truncated} with current time {now_truncated}")
             if now_truncated >= scheduled_time_truncated:
+                logger.info(f"Reminder {reminder['id']} is due")
                 pending_reminders.append(reminder)
+            else:
+                logger.info(f"Reminder {reminder['id']} is not yet due")
         
         logger.info(f"Found {len(pending_reminders)} pending reminders after time comparison")
         

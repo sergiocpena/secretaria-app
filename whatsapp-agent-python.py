@@ -533,18 +533,38 @@ def parse_datetime(date_str, time_str):
         return tomorrow_noon.astimezone(timezone.utc)
 
 def create_reminder(user_phone, title, scheduled_time):
-    """Cria um novo lembrete no Supabase"""
+    """Cria um novo lembrete no banco de dados"""
     try:
-        data = {
+        logger.info(f"Creating reminder: title='{title}', time={scheduled_time}, user={user_phone}")
+        
+        # Verificar se o título está vazio
+        if not title or title.strip() == "":
+            logger.error("Cannot create reminder with empty title")
+            return None
+        
+        # Verificar se a data/hora é válida
+        if not scheduled_time:
+            logger.error("Cannot create reminder with empty scheduled time")
+            return None
+        
+        # Inserir o lembrete no banco de dados
+        result = supabase.table('reminders').insert({
             'user_phone': user_phone,
             'title': title,
             'scheduled_time': scheduled_time.isoformat(),
-            'is_active': True
-        }
+            'is_active': True,
+            'retry_count': 0,
+            'created_at': datetime.now(timezone.utc).isoformat()
+        }).execute()
         
-        result = supabase.table('reminders').insert(data).execute()
-        logger.info(f"Reminder created: {title} at {scheduled_time}")
-        return result.data[0]['id'] if result.data else None
+        if result and result.data and len(result.data) > 0:
+            reminder_id = result.data[0]['id']
+            logger.info(f"Successfully created reminder with ID: {reminder_id}")
+            return reminder_id
+        else:
+            logger.error(f"Failed to create reminder, unexpected response: {result}")
+            return None
+            
     except Exception as e:
         logger.error(f"Error creating reminder: {str(e)}")
         return None
@@ -586,6 +606,8 @@ def handle_reminder_intent(user_phone, message_text):
             message_text = ' '.join(str(x) for x in message_text)  # Convert list to string safely
         normalized_text = str(message_text).lower().strip()
         
+        logger.info(f"Processing reminder intent with normalized text: '{normalized_text}'")
+        
         # Use the same list_keywords as in detect_reminder_intent
         list_keywords = ["lembretes", "meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes"]
         if any(keyword in normalized_text for keyword in list_keywords):
@@ -597,11 +619,13 @@ def handle_reminder_intent(user_phone, message_text):
         is_create_request = any(keyword in normalized_text for keyword in create_keywords)
         
         if is_create_request:
+            logger.info("Detected create reminder request")
             # Extrair detalhes dos lembretes
             reminder_data = parse_reminder(normalized_text, "criar")
             logger.info(f"Reminder data after parsing: {reminder_data}")
             
             if reminder_data and "reminders" in reminder_data and reminder_data["reminders"]:
+                logger.info(f"Found {len(reminder_data['reminders'])} reminders in parsed data")
                 # Processar múltiplos lembretes
                 created_reminders = []
                 
@@ -613,18 +637,23 @@ def handle_reminder_intent(user_phone, message_text):
                         time_value = reminder.get("time", None)
                         logger.info(f"Parsing datetime with date={date_value}, time={time_value}")
                         
-                        scheduled_time = parse_datetime(date_value, time_value)
-                        logger.info(f"Scheduled time after parsing: {scheduled_time}")
-                        
-                        # Criar o lembrete
-                        reminder_id = create_reminder(user_phone, reminder["title"], scheduled_time)
-                        logger.info(f"Created reminder with ID: {reminder_id}")
-                        
-                        if reminder_id:
-                            created_reminders.append({
-                                "title": reminder["title"],
-                                "time": scheduled_time
-                            })
+                        try:
+                            scheduled_time = parse_datetime(date_value, time_value)
+                            logger.info(f"Scheduled time after parsing: {scheduled_time}")
+                            
+                            # Criar o lembrete
+                            reminder_id = create_reminder(user_phone, reminder["title"], scheduled_time)
+                            logger.info(f"Created reminder with ID: {reminder_id}")
+                            
+                            if reminder_id:
+                                created_reminders.append({
+                                    "title": reminder["title"],
+                                    "time": scheduled_time
+                                })
+                            else:
+                                logger.error(f"Failed to create reminder: {reminder}")
+                        except Exception as e:
+                            logger.error(f"Error parsing datetime or creating reminder: {str(e)}")
                 
                 # Formatar resposta para múltiplos lembretes
                 if created_reminders:

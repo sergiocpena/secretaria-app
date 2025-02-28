@@ -583,7 +583,35 @@ def handle_reminder_intent(user_phone, message_text):
             
             if not reminders:
                 return "Você não tem lembretes ativos para cancelar."
+            
+            # Special case for "cancelar todos os lembretes" - handle directly without parsing
+            if "todos os lembretes" in normalized_text or "todos lembretes" in normalized_text:
+                logger.info("Detected 'cancel all reminders' request directly from text")
+                cancelled_reminders = []
                 
+                for reminder in reminders:
+                    try:
+                        logger.info(f"Attempting to cancel reminder {reminder['id']} (title: {reminder['title']})")
+                        update_result = supabase.table('reminders') \
+                            .update({'is_active': False}) \
+                            .eq('id', reminder['id']) \
+                            .execute()
+                        
+                        cancelled_reminders.append(reminder)
+                        logger.info(f"Successfully canceled reminder {reminder['id']} (all cancellation)")
+                    except Exception as e:
+                        logger.error(f"Error cancelling reminder {reminder['id']}: {str(e)}")
+                
+                # Format response for cancelled reminders
+                if cancelled_reminders:
+                    response = f"🗑️ {len(cancelled_reminders)} lembretes cancelados com sucesso.\n\n"
+                    response += "Você não tem mais lembretes ativos."
+                    logger.info(f"All reminders cancelled successfully: {len(cancelled_reminders)}")
+                    return response
+                else:
+                    logger.warning("Failed to cancel any reminders in 'all' mode")
+                    return "❌ Não consegui cancelar os lembretes. Por favor, tente novamente."
+            
             # Parse the cancellation request
             logger.info(f"Parsing cancellation request: '{normalized_text}'")
             cancel_data = parse_reminder(normalized_text, "cancelar")

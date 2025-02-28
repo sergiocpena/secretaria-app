@@ -968,20 +968,62 @@ def webhook():
                 elif action == "criar":
                     # Criar lembrete
                     reminder_data = parse_reminder(transcribed_text, action)
-                    if reminder_data and 'title' in reminder_data and 'date' in reminder_data:
-                        # Converter data/hora para timestamp
-                        scheduled_time = parse_datetime_with_llm(
-                            reminder_data.get('date', 'amanhã'), 
-                            reminder_data.get('time', '12:00')
-                        )
+                    logger.info(f"Reminder data after parsing: {reminder_data}")
+                    
+                    if reminder_data and "reminders" in reminder_data and reminder_data["reminders"]:
+                        logger.info(f"Found {len(reminder_data['reminders'])} reminders in parsed data")
+                        # Processar múltiplos lembretes
+                        created_reminders = []
                         
-                        # Criar o lembrete
-                        reminder_id = create_reminder(user_phone, reminder_data['title'], scheduled_time)
+                        for reminder in reminder_data["reminders"]:
+                            logger.info(f"Processing reminder: {reminder}")
+                            if "title" in reminder and "datetime" in reminder:
+                                # Process datetime components
+                                dt_components = reminder["datetime"]
+                                try:
+                                    # Create datetime object from components
+                                    brazil_tz = pytz.timezone('America/Sao_Paulo')
+                                    now_local = datetime.now(brazil_tz)
+                                    
+                                    dt = datetime(
+                                        year=dt_components.get('year', now_local.year),
+                                        month=dt_components.get('month', now_local.month),
+                                        day=dt_components.get('day', now_local.day),
+                                        hour=dt_components.get('hour', 12),
+                                        minute=dt_components.get('minute', 0),
+                                        second=0,
+                                        microsecond=0
+                                    )
+                                    
+                                    # Add timezone info (Brazil)
+                                    dt = brazil_tz.localize(dt)
+                                    
+                                    # Convert to UTC
+                                    scheduled_time = dt.astimezone(timezone.utc)
+                                    
+                                    # Criar o lembrete
+                                    reminder_id = create_reminder(user_phone, reminder["title"], scheduled_time)
+                                    
+                                    if reminder_id:
+                                        created_reminders.append({
+                                            "title": reminder["title"],
+                                            "time": scheduled_time
+                                        })
+                                except Exception as e:
+                                    logger.error(f"Error processing datetime: {str(e)}")
                         
-                        if reminder_id:
-                            full_response = f"✅ Lembrete criado: {reminder_data['title']} para {format_datetime(scheduled_time)}"
+                        # Formatar resposta para múltiplos lembretes
+                        if created_reminders:
+                            if len(created_reminders) == 1:
+                                reminder = created_reminders[0]
+                                full_response = f"✅ Lembrete criado: {reminder['title']} para {format_datetime(reminder['time'])}"
+                            else:
+                                response = f"✅ {len(created_reminders)} lembretes criados:\n\n"
+                                for i, reminder in enumerate(created_reminders, 1):
+                                    response += f"{i}. *{reminder['title']}* - {format_datetime(reminder['time'])}\n"
+                                full_response = response
                         else:
-                            full_response = "❌ Não consegui criar o lembrete. Por favor, tente novamente."
+                            full_response = "❌ Não consegui criar os lembretes. Por favor, tente novamente."
                     else:
                         full_response = "❌ Não consegui entender os detalhes do lembrete. Por favor, especifique o título e quando deseja ser lembrado."
             else:

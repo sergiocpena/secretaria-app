@@ -276,6 +276,10 @@ def parse_reminder(message, action):
         current_year = now_local.year
         current_month = now_local.month
         current_day = now_local.day
+        tomorrow = now_local + timedelta(days=1)
+        tomorrow_day = tomorrow.day
+        tomorrow_month = tomorrow.month
+        tomorrow_year = tomorrow.year
         
         system_prompt = ""
         
@@ -285,6 +289,7 @@ def parse_reminder(message, action):
             
             A data atual é: {now_local.strftime('%d/%m/%Y')} (dia/mês/ano)
             A hora atual é: {now_local.strftime('%H:%M')} (formato 24h)
+            Amanhã será: {tomorrow.strftime('%d/%m/%Y')} (dia/mês/ano)
             
             Analise a mensagem do usuário e extraia os detalhes do lembrete, incluindo título e data/hora.
             
@@ -308,7 +313,7 @@ def parse_reminder(message, action):
             1. Se o usuário não especificar o ano, use o ano atual ({current_year}).
             2. Se o usuário não especificar o mês, use o mês atual ({current_month}).
             3. Se o usuário não especificar a hora, use 12:00 (meio-dia).
-            4. Se o usuário mencionar "amanhã", incremente o dia atual.
+            4. Se o usuário mencionar "amanhã", use dia={tomorrow_day}, mês={tomorrow_month}, ano={tomorrow_year}.
             5. Se o usuário mencionar "próxima semana", adicione 7 dias à data atual.
             6. Se o usuário mencionar um dia da semana (ex: "segunda"), use a próxima ocorrência desse dia.
             7. Interprete expressões como "daqui a 2 dias" ou "em 3 horas" corretamente.
@@ -383,20 +388,44 @@ def parse_reminder(message, action):
                         # Add timezone info to make it aware
                         dt = brazil_tz.localize(naive_dt)
                         
+                        # Special handling for "tomorrow" - check if the date should be tomorrow
+                        if "amanhã" in message.lower() or "amanha" in message.lower():
+                            tomorrow = now_local + timedelta(days=1)
+                            # Only update if the date is not already set to tomorrow or later
+                            if dt.date() < tomorrow.date():
+                                logger.info(f"Adjusting date to tomorrow because 'amanhã' was mentioned")
+                                dt = dt.replace(year=tomorrow.year, month=tomorrow.month, day=tomorrow.day)
+                                # Update the components
+                                dt_components["year"] = tomorrow.year
+                                dt_components["month"] = tomorrow.month
+                                dt_components["day"] = tomorrow.day
+                        
                         # If the datetime is in the past, adjust it
                         if dt < now_local:
                             logger.info(f"Detected past date: {dt}, adjusting to future")
                             # If it's today but earlier time, move to tomorrow
                             if dt.date() == now_local.date():
                                 dt = dt + timedelta(days=1)
-                            # If it's an earlier date this year, assume it's next year
-                            elif dt.year == current_year:
-                                dt = dt.replace(year=current_year + 1)
-                            
-                            # Update the components
-                            dt_components["year"] = dt.year
-                            dt_components["month"] = dt.month
-                            dt_components["day"] = dt.day
+                                # Update the components
+                                dt_components["year"] = dt.year
+                                dt_components["month"] = dt.month
+                                dt_components["day"] = dt.day
+                            # If it's an earlier date this year, but not more than 30 days in the past,
+                            # assume it's next month
+                            elif dt.year == current_year and (now_local.date() - dt.date()).days < 30:
+                                # Add one month
+                                if dt.month == 12:
+                                    dt = dt.replace(year=dt.year + 1, month=1)
+                                else:
+                                    dt = dt.replace(month=dt.month + 1)
+                                # Update the components
+                                dt_components["year"] = dt.year
+                                dt_components["month"] = dt.month
+                            # Otherwise, assume it's next year
+                            else:
+                                dt = dt.replace(year=dt.year + 1)
+                                # Update the components
+                                dt_components["year"] = dt.year
                     except Exception as e:
                         logger.error(f"Error post-processing date: {str(e)}")
         

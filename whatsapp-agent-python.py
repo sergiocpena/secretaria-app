@@ -547,6 +547,15 @@ def create_reminder(user_phone, title, scheduled_time):
             logger.error("Cannot create reminder with empty scheduled time")
             return None
         
+        # Verificar se scheduled_time é um objeto datetime com timezone
+        if not isinstance(scheduled_time, datetime) or scheduled_time.tzinfo is None:
+            logger.error(f"Invalid scheduled_time format: {type(scheduled_time)}, tzinfo={getattr(scheduled_time, 'tzinfo', None)}")
+            # Try to fix it if possible
+            if isinstance(scheduled_time, datetime):
+                scheduled_time = scheduled_time.replace(tzinfo=timezone.utc)
+            else:
+                return None
+        
         # Inserir o lembrete no banco de dados
         result = supabase.table('reminders').insert({
             'user_phone': user_phone,

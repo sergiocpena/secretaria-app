@@ -847,17 +847,38 @@ def send_reminder_notification(reminder):
         title = reminder['title']
         
         # Format the message
-        message = f"🔔 *LEMBRETE*: {title}"
+        message_body = f"🔔 *LEMBRETE*: {title}"
         
-        logger.info(f"Sending reminder to {user_phone}: {message}")
+        logger.info(f"Sending reminder to {user_phone}: {message_body}")
         
-        # Send the message
-        send_whatsapp_message(user_phone, message)
+        # Try to queue the message first
+        queue_success = send_whatsapp_message(user_phone, message_body)
+        
+        # If queueing fails, try direct send
+        if not queue_success:
+            logger.warning(f"Queue failed, trying direct send to {user_phone}")
+            try:
+                # Format the number for Twilio
+                if not user_phone.startswith('whatsapp:'):
+                    to_number = f"whatsapp:{user_phone}"
+                else:
+                    to_number = user_phone
+                
+                # Send directly
+                message = twilio_client.messages.create(
+                    body=message_body,
+                    from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
+                    to=to_number
+                )
+                logger.info(f"Direct send successful: {message.sid}")
+                queue_success = True
+            except Exception as e:
+                logger.error(f"Direct send failed: {str(e)}")
         
         # Store in conversation history
-        store_conversation(user_phone, message, 'text', False, agent="REMINDER")
+        store_conversation(user_phone, message_body, 'text', False, agent="REMINDER")
         
-        return True
+        return queue_success
     except Exception as e:
         logger.error(f"Error sending reminder notification: {str(e)}")
         return False
@@ -1361,6 +1382,12 @@ def api_check_reminders():
         if api_key != os.getenv('REMINDER_API_KEY'):
             return jsonify({"error": "Unauthorized"}), 401
         
+        # Ensure message sender thread is running
+        global message_sender_thread
+        if not hasattr(app, 'message_sender_thread') or not app.message_sender_thread.is_alive():
+            logger.info("Starting message sender thread for reminder check")
+            app.message_sender_thread = start_message_sender()
+        
         # Processar lembretes
         result = check_and_send_reminders()
         
@@ -1442,3 +1469,15 @@ try:
     logger.info(f"Successfully retrieved {len(messages)} messages from Twilio")
 except Exception as e:
     logger.error(f"Error checking Twilio credentials: {str(e)}")
+
+if __name__ == '__main__':
+    # Start the message sender thread
+    app.message_sender_thread = start_message_sender()
+    
+    # Start the self-ping thread if needed
+    if os.getenv('ENABLE_SELF_PING', 'false').lower() == 'true':
+        start_self_ping()
+    
+    # Start the Flask app
+    port = int(os.getenv('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)

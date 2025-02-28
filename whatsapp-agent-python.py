@@ -9,18 +9,21 @@ from dotenv import load_dotenv
 import threading
 import time as time_module  # Rename to avoid conflict with datetime.time
 import base64
-from supabase import create_client
 import json
 from datetime import datetime, timezone, timedelta, time
 import re
 import queue
 import logging
 import pytz
-from utils.database import (
+
+# Import from our new modules
+from utils.database import supabase
+from agents.general_agent.general_db import store_conversation, get_conversation_history
+from agents.reminder_agent.reminder_db import (
     list_reminders, create_reminder, cancel_reminder, 
     get_pending_reminders, get_late_reminders,
     format_reminder_list_by_time, format_created_reminders,
-    to_local_timezone, to_utc_timezone, store_conversation,
+    to_local_timezone, to_utc_timezone, format_datetime,
     BRAZIL_TIMEZONE
 )
 
@@ -40,11 +43,6 @@ app = Flask(__name__)
 # Initialize OpenAI and Twilio clients
 openai.api_key = os.getenv('OPENAI_API_KEY')
 twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
-
-# Initialize Supabase client
-supabase_url = os.getenv('SUPABASE_URL')
-supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # Use service role key to bypass RLS
-supabase = create_client(supabase_url, supabase_key)
 
 # Message retry queue
 message_queue = queue.Queue()
@@ -195,24 +193,6 @@ def start_self_ping():
     ping_thread = threading.Thread(target=ping_self, daemon=True)
     ping_thread.start()
     logger.info("Self-ping background thread started")
-
-def store_conversation(user_phone, message_content, message_type, is_from_user, agent="DEFAULT"):
-    """Store a message in the Supabase conversations table"""
-    try:
-        data = {
-            'user_phone': user_phone,
-            'message_content': message_content,
-            'message_type': message_type,
-            'is_from_user': is_from_user,
-            'agent': agent
-        }
-        
-        result = supabase.table('conversations').insert(data).execute()
-        logger.info(f"Message stored in database: {message_type} from {'user' if is_from_user else 'agent'}")
-        return True
-    except Exception as e:
-        logger.error(f"Error storing message in database: {str(e)}")
-        return False
 
 def get_ai_response(message, is_audio_transcription=False):
     try:
@@ -527,62 +507,6 @@ def parse_datetime_with_llm(date_str):
             hour=12, minute=0, second=0, microsecond=0
         )
         return tomorrow_noon.astimezone(timezone.utc)
-
-def list_reminders(user_phone):
-    """Lists active reminders for a user"""
-    try:
-        logger.info(f"Listing active reminders for user {user_phone}")
-        result = supabase.table('reminders') \
-            .select('*') \
-            .eq('user_phone', user_phone) \
-            .eq('is_active', True) \
-            .order('scheduled_time') \
-            .execute()
-        
-        logger.info(f"Found {len(result.data)} active reminders")
-        return result.data
-    except Exception as e:
-        logger.error(f"Error listing reminders: {str(e)}")
-        return []
-
-def create_reminder(user_phone, title, scheduled_time):
-    """Cria um novo lembrete no banco de dados"""
-    try:
-        logger.info(f"Creating reminder for user {user_phone}: {title} at {scheduled_time}")
-        data = {
-            'user_phone': user_phone,
-            'title': title,
-            'scheduled_time': scheduled_time.isoformat(),
-            'is_active': True
-        }
-        
-        result = supabase.table('reminders').insert(data).execute()
-        
-        if result.data and len(result.data) > 0:
-            reminder_id = result.data[0]['id']
-            logger.info(f"Created reminder {reminder_id} for user {user_phone}: {title} at {scheduled_time}")
-            return reminder_id
-        else:
-            logger.error("Failed to create reminder: No data returned")
-            return None
-    except Exception as e:
-        logger.error(f"Error creating reminder: {str(e)}")
-        return None
-
-def format_reminder_list(reminders):
-    """Formata a lista de lembretes para exibição"""
-    if not reminders:
-        return "Você não tem lembretes ativos no momento."
-    
-    response = "📋 *Seus lembretes:*\n"
-    for i, reminder in enumerate(reminders, 1):
-        scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-        formatted_time = format_datetime(scheduled_time)
-        response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
-    
-    response += "Para cancelar um lembrete, envie 'cancelar lembrete 2' (usando o número) ou 'cancelar lembrete [título]' (usando o nome)"
-    
-    return response
 
 def handle_reminder_intent(user_phone, message_text):
     """Processa intenções relacionadas a lembretes"""

@@ -1,15 +1,25 @@
-# Database utilities (Supabase)
+"""
+Core database functionality (just Supabase init).
+This file provides the basic Supabase client for use by other modules.
+"""
 import os
 import logging
 from supabase import create_client
+from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
 import pytz
 
+# Load environment variables if not already loaded
+load_dotenv()
+
+# Configure logging
 logger = logging.getLogger(__name__)
 
 # Initialize Supabase client
 supabase_url = os.getenv('SUPABASE_URL')
 supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # Use service role key to bypass RLS
+
+# Create and export the client
 supabase = create_client(supabase_url, supabase_key)
 
 # Define Brazil timezone
@@ -229,4 +239,31 @@ def format_created_reminders(created_reminders):
         response = f"✅ {len(sorted_reminders)} lembretes criados:\n\n"
         for i, reminder in enumerate(sorted_reminders, 1):
             response += f"{i}. *{reminder['title']}* - {format_datetime(reminder['time'])}\n"
-        return response 
+        return response
+
+def execute_query(table, query_type, data=None, filters=None):
+    """Generic function to execute Supabase queries"""
+    try:
+        if query_type == 'select':
+            query = supabase.table(table).select('*')
+            if filters:
+                for key, value in filters.items():
+                    query = query.eq(key, value)
+            return query.execute()
+        elif query_type == 'insert':
+            return supabase.table(table).insert(data).execute()
+        elif query_type == 'update':
+            query = supabase.table(table).update(data)
+            if filters:
+                for key, value in filters.items():
+                    query = query.eq(key, value)
+            return query.execute()
+        elif query_type == 'delete':
+            query = supabase.table(table)
+            if filters:
+                for key, value in filters.items():
+                    query = query.eq(key, value)
+            return query.delete().execute()
+    except Exception as e:
+        logger.error(f"Database error: {str(e)}")
+        return None 

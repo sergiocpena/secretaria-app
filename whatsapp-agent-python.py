@@ -912,32 +912,22 @@ def start_reminder_checker():
 # ===== FIM DAS FUNÇÕES DE LEMBRETES =====
 
 def process_image(image_url):
+    """Process an image using OpenAI's vision model"""
     try:
-        # Download the image
-        auth = (os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
-        response = requests.get(image_url, auth=auth)
+        logger.info(f"Processing image: {image_url}")
         
-        if response.status_code != 200:
-            logger.error(f"Failed to download image: {response.status_code}")
-            return "Não consegui baixar sua imagem."
-            
-        # Convert image to base64
-        image_base64 = base64.b64encode(response.content).decode('utf-8')
-        
-        # Send to GPT-4o (which has vision capabilities)
         response = openai.ChatCompletion.create(
-            model="gpt-4o",  # Updated from gpt-4-vision-preview to gpt-4o
+            model="gpt-4o",
             messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that can analyze images. Be concise and friendly in your responses."
+                },
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "Descreva o que você vê nesta imagem em detalhes."},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_base64}"
-                            }
-                        }
+                        {"type": "text", "text": "What's in this image?"},
+                        {"type": "image_url", "image_url": {"url": image_url}}
                     ]
                 }
             ],
@@ -946,42 +936,42 @@ def process_image(image_url):
         
         return response.choices[0].message.content.strip()
     except Exception as e:
-        logger.error(f"Image Processing Error: {str(e)}")
-        return "Desculpe, tive um problema ao analisar sua imagem."
+        logger.error(f"Error processing image: {str(e)}")
+        return "Desculpe, não consegui analisar esta imagem."
 
 def transcribe_audio(audio_url):
+    """Transcribe audio using OpenAI's Whisper API"""
     try:
+        logger.info(f"Transcribing audio: {audio_url}")
+        
         # Download the audio file
-        auth = (os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
-        response = requests.get(audio_url, auth=auth)
+        audio_response = requests.get(audio_url)
         
-        if response.status_code != 200:
-            logger.error(f"Failed to download audio: {response.status_code}")
-            return "Não consegui processar sua mensagem de voz."
+        if audio_response.status_code != 200:
+            raise Exception(f"Failed to download audio: {audio_response.status_code}")
         
-        # Save the audio file temporarily
-        temp_file_path = "temp_audio.ogg"
-        with open(temp_file_path, "wb") as f:
-            f.write(response.content)
+        # Save to a temporary file
+        temp_file = "temp_audio.ogg"
+        with open(temp_file, "wb") as f:
+            f.write(audio_response.content)
         
-        # Transcribe using OpenAI's Whisper API
-        with open(temp_file_path, "rb") as audio_file:
-            transcript = openai.Audio.transcribe(
-                "whisper-1",
+        # Transcribe using OpenAI
+        with open(temp_file, "rb") as audio_file:
+            transcription = openai.Audio.transcribe(
+                "whisper-1", 
                 audio_file
             )
         
-        # Clean up the temporary file
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
+        # Clean up
+        os.remove(temp_file)
         
-        transcribed_text = transcript.text
-        logger.info(f"Transcribed: {transcribed_text}")
+        transcribed_text = transcription.text
+        logger.info(f"Transcription result: {transcribed_text}")
+        
         return transcribed_text
-    
     except Exception as e:
-        logger.error(f"Transcription Error: {str(e)}")
-        return "Tive dificuldades para entender sua mensagem de voz."
+        logger.error(f"Error transcribing audio: {str(e)}")
+        return "Não foi possível transcrever o áudio."
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -995,35 +985,30 @@ def webhook():
         # Log the incoming message
         logger.info(f"Received message from {from_number}: {body[:50]}..." if len(body) > 50 else f"Received message from {from_number}: {body}")
         
-        # Check for media
-        media_urls = []
-        for i in range(num_media):
-            media_url = request.values.get(f'MediaUrl{i}')
-            media_type = request.values.get(f'MediaContentType{i}')
-            
-            if media_url:
-                media_urls.append((media_url, media_type))
+        # Extract the phone number without the "whatsapp:" prefix
+        user_phone = from_number.replace('whatsapp:', '')
         
-        # Process the message
+        # Store the incoming message immediately
         if num_media > 0:
-            # Handle media messages
-            response_text = handle_media_message(from_number, body, media_urls)
+            media_type = request.values.get('MediaContentType0', '')
+            media_url = request.values.get('MediaUrl0', '')
+            store_conversation(user_phone, media_url, media_type.split('/')[0], True)
         else:
-            # Check for reminder intent
-            is_reminder, intent = detect_reminder_intent_with_llm(body)
-            
-            if is_reminder:
-                # Handle reminder intent
-                logger.info(f"Reminder intent detected: {intent}")
-                response_text = handle_reminder_intent(from_number, body)
-            else:
-                # Handle general conversation
-                logger.info("No reminder intent detected, handling as general conversation")
-                response_text = handle_message(from_number, body)
+            store_conversation(user_phone, body, 'text', True)
         
-        # Create TwiML response
+        # Send an immediate acknowledgment response
         resp = MessagingResponse()
-        resp.message(response_text)
+        
+        # Start processing in a background thread
+        threading.Thread(
+            target=process_message_async,
+            args=(from_number, body, num_media, request.values),
+            daemon=True
+        ).start()
+        
+        # For media messages, acknowledge receipt
+        if num_media > 0:
+            resp.message("Recebi sua mídia! Estou processando...")
         
         return str(resp)
     
@@ -1298,6 +1283,71 @@ def detect_reminder_intent_with_llm(message):
         # Fall back to keyword-based detection if LLM fails
         return detect_reminder_intent(message)
 
+def process_message_async(from_number, body, num_media, form_values):
+    """Process a message asynchronously after sending an acknowledgment"""
+    try:
+        # Extract the phone number without the "whatsapp:" prefix
+        user_phone = from_number.replace('whatsapp:', '')
+        
+        response_text = None
+        
+        # Process the message
+        if num_media > 0:
+            # Handle media messages
+            media_urls = []
+            for i in range(num_media):
+                media_url = form_values.get(f'MediaUrl{i}')
+                media_type = form_values.get(f'MediaContentType{i}')
+                
+                if media_url:
+                    media_urls.append((media_url, media_type))
+            
+            # Process media
+            media_type = form_values.get('MediaContentType0', '')
+            
+            if media_type.startswith('image/'):
+                # Process image
+                logger.info(f"Processing image from {from_number}")
+                response_text = process_image(media_urls[0][0])
+            
+            elif media_type.startswith('audio/'):
+                # Process audio
+                logger.info(f"Processing audio from {from_number}")
+                transcribed_text = transcribe_audio(media_urls[0][0])
+                
+                # Check for reminder intent in transcription
+                is_reminder, intent = detect_reminder_intent_with_llm(transcribed_text)
+                
+                if is_reminder:
+                    response_text = handle_reminder_intent(user_phone, transcribed_text)
+                else:
+                    response_text = get_ai_response(transcribed_text, is_audio_transcription=True)
+        else:
+            # Check for reminder intent
+            is_reminder, intent = detect_reminder_intent_with_llm(body)
+            
+            if is_reminder:
+                # Handle reminder intent
+                logger.info(f"Reminder intent detected: {intent}")
+                response_text = handle_reminder_intent(user_phone, body)
+            else:
+                # Handle general conversation
+                logger.info("No reminder intent detected, handling as general conversation")
+                response_text = handle_message(user_phone, body)
+        
+        # Send the response if we have one
+        if response_text:
+            # Store the response
+            store_conversation(user_phone, response_text, 'text', False)
+            
+            # Send the message
+            send_whatsapp_message(from_number, response_text)
+            
+    except Exception as e:
+        logger.error(f"Error in async message processing: {str(e)}")
+        error_message = "Desculpe, ocorreu um erro ao processar sua mensagem."
+        send_whatsapp_message(from_number, error_message)
+
 # Add this to your startup code
 try:
     logger.info("Checking Twilio credentials...")
@@ -1309,6 +1359,11 @@ try:
     logger.info(f"Successfully retrieved {len(messages)} messages from Twilio")
 except Exception as e:
     logger.error(f"Error checking Twilio credentials: {str(e)}")
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for Render"""
+    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
 
 if __name__ == '__main__':
     # Start the message sender thread

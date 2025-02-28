@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: whatsapp-agent
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --config gunicorn_config.py whatsapp-agent-python:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: PORT
+        value: 5000
+    healthCheckPath: /health 

@@ -265,14 +265,26 @@ def parse_reminder(message, action):
         
         if action == "criar":
             system_prompt = """
-            Extraia as informações de lembrete da mensagem do usuário. 
-            Retorne um JSON com os seguintes campos:
-            - title: o título ou assunto do lembrete
-            - date: a data do lembrete (formato YYYY-MM-DD, ou 'hoje', 'amanhã')
-              Se for um tempo relativo como "daqui 5 minutos", coloque a expressão completa aqui.
-            - time: a hora do lembrete (formato HH:MM)
-              Deixe vazio se o tempo estiver incluído na expressão de data relativa.
+            Extraia as informações de lembrete da mensagem do usuário.
+            Se houver múltiplos lembretes, retorne um array de objetos.
             
+            Retorne um JSON com o seguinte formato:
+            {
+              "reminders": [
+                {
+                  "title": "título ou assunto do lembrete",
+                  "date": "data do lembrete (formato YYYY-MM-DD, ou 'hoje', 'amanhã')",
+                  "time": "hora do lembrete (formato HH:MM)"
+                },
+                {
+                  "title": "título do segundo lembrete",
+                  "date": "data do segundo lembrete",
+                  "time": "hora do segundo lembrete"
+                }
+              ]
+            }
+            
+            Para tempos relativos como "daqui 5 minutos", coloque a expressão completa no campo "date" e deixe "time" vazio.
             Se alguma informação estiver faltando, use null para o campo.
             """
         elif action == "cancelar":
@@ -295,20 +307,22 @@ def parse_reminder(message, action):
     except Exception as e:
         logger.error(f"Error parsing reminder: {str(e)}")
         return None
-    
+
 def parse_datetime(date_str, time_str):
     """Converte strings de data e hora para um objeto datetime"""
     try:
-        now = datetime.now(timezone.utc)
+        # Get current time in Brazil timezone first
+        brazil_tz = pytz.timezone('America/Sao_Paulo')  # UTC-3
+        now_local = datetime.now(brazil_tz)
         
         # Verificar se temos valores nulos
         if date_str is None:
             # Se não tiver data, assumir hoje
-            date = now.date()
+            date = now_local.date()
         elif date_str.lower() == 'hoje':
-            date = now.date()
+            date = now_local.date()
         elif date_str.lower() == 'amanhã' or date_str.lower() == 'amanha':
-            date = (now + timedelta(days=1)).date()
+            date = (now_local + timedelta(days=1)).date()
         else:
             # Tentar interpretar expressões relativas como "daqui X minutos/horas/dias"
             relative_match = re.search(r'daqui\s+(\d+)\s+(minutos?|horas?|dias?)', date_str.lower())
@@ -317,11 +331,11 @@ def parse_datetime(date_str, time_str):
                 unit = relative_match.group(2)
                 
                 if 'minuto' in unit:
-                    return now + timedelta(minutes=amount)
+                    return now_local + timedelta(minutes=amount)
                 elif 'hora' in unit:
-                    return now + timedelta(hours=amount)
+                    return now_local + timedelta(hours=amount)
                 elif 'dia' in unit:
-                    return now + timedelta(days=amount)
+                    return now_local + timedelta(days=amount)
             
             # Se não for expressão relativa, tentar como data específica
             try:
@@ -333,11 +347,15 @@ def parse_datetime(date_str, time_str):
                     date = datetime.strptime(date_str, "%d/%m/%Y").date()
                 except ValueError:
                     # Se falhar, usar amanhã como padrão
-                    date = (now + timedelta(days=1)).date()
+                    date = (now_local + timedelta(days=1)).date()
         
         # Se já retornamos um datetime completo (caso de tempo relativo)
         if isinstance(date, datetime):
-            return date
+            # Ensure it's in the local timezone
+            if date.tzinfo is None:
+                date = brazil_tz.localize(date)
+            # Convert to UTC for storage
+            return date.astimezone(timezone.utc)
         
         # Processar a hora se fornecida
         if time_str:
@@ -356,25 +374,27 @@ def parse_datetime(date_str, time_str):
                     hour = 12
                     minute = 0
             
-            # Criar o datetime combinado
+            # Criar o datetime combinado no fuso horário local
             dt = datetime.combine(date, datetime.min.time().replace(hour=hour, minute=minute))
             
-            # Adicionar timezone
-            dt = dt.replace(tzinfo=timezone.utc)
-            return dt
+            # Adicionar timezone local
+            dt = brazil_tz.localize(dt)
+            
+            # Converter para UTC para armazenamento
+            return dt.astimezone(timezone.utc)
         else:
             # Se não houver hora, usar meio-dia
             dt = datetime.combine(date, datetime.min.time().replace(hour=12, minute=0))
-            dt = dt.replace(tzinfo=timezone.utc)
-            return dt
+            dt = brazil_tz.localize(dt)
+            return dt.astimezone(timezone.utc)
             
     except Exception as e:
         logger.error(f"Error parsing datetime: {str(e)}")
         # Retornar data/hora padrão (amanhã ao meio-dia)
-        tomorrow_noon = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
+        tomorrow_noon = (datetime.now(brazil_tz) + timedelta(days=1)).replace(
             hour=12, minute=0, second=0, microsecond=0
         )
-        return tomorrow_noon
+        return tomorrow_noon.astimezone(timezone.utc)
 
 def create_reminder(user_phone, title, scheduled_time):
     """Cria um novo lembrete no Supabase"""
@@ -433,7 +453,50 @@ def handle_reminder_intent(user_phone, message_text):
         # Use the same list_keywords as in detect_reminder_intent
         list_keywords = ["lembretes", "meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes"]
         if any(keyword in normalized_text for keyword in list_keywords):
-            return list_reminders(user_phone)
+            reminders = list_reminders(user_phone)
+            return format_reminder_list(reminders)
+            
+        # Verificar se é uma solicitação para criar lembretes
+        create_keywords = ["lembrar", "lembre", "lembra", "criar lembrete", "novo lembrete"]
+        is_create_request = any(keyword in normalized_text for keyword in create_keywords)
+        
+        if is_create_request:
+            # Extrair detalhes dos lembretes
+            reminder_data = parse_reminder(normalized_text, "criar")
+            
+            if reminder_data and "reminders" in reminder_data and reminder_data["reminders"]:
+                # Processar múltiplos lembretes
+                created_reminders = []
+                
+                for reminder in reminder_data["reminders"]:
+                    if "title" in reminder:
+                        # Converter data/hora para timestamp
+                        scheduled_time = parse_datetime(
+                            reminder.get("date", "hoje"), 
+                            reminder.get("time", None)
+                        )
+                        
+                        # Criar o lembrete
+                        reminder_id = create_reminder(user_phone, reminder["title"], scheduled_time)
+                        
+                        if reminder_id:
+                            created_reminders.append({
+                                "title": reminder["title"],
+                                "time": scheduled_time
+                            })
+                
+                # Formatar resposta para múltiplos lembretes
+                if created_reminders:
+                    if len(created_reminders) == 1:
+                        reminder = created_reminders[0]
+                        return f"✅ Lembrete criado: {reminder['title']} para {format_datetime(reminder['time'])}"
+                    else:
+                        response = f"✅ {len(created_reminders)} lembretes criados:\n\n"
+                        for i, reminder in enumerate(created_reminders, 1):
+                            response += f"{i}. *{reminder['title']}* - {format_datetime(reminder['time'])}\n"
+                        return response
+                else:
+                    return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
             
         # Verificar se é uma solicitação para cancelar um lembrete
         cancel_keywords = ["cancelar", "remover", "apagar", "deletar"]
@@ -544,21 +607,6 @@ def handle_reminder_intent(user_phone, message_text):
             formatted_time = format_datetime(scheduled_time)
             
             return f"✅ Lembrete cancelado com sucesso:\n*{reminder['title']}* - {formatted_time}"
-        
-        # Verificar se é uma solicitação para criar um lembrete
-        reminder_match = re.search(r'lembr(?:ar|e-me|ete)\s+(?:de\s+)?(.+?)(?:\s+(?:em|às|as|no dia|na|no|para|daqui a)\s+(.+))?$', normalized_text)
-        
-        if reminder_match:
-            # Extrair o título e o tempo do lembrete
-            title = reminder_match.group(1).strip()
-            time_str = reminder_match.group(2).strip() if reminder_match.group(2) else None
-            
-            # Se não houver tempo especificado, perguntar ao usuário
-            if not time_str:
-                return f"Para quando devo configurar o lembrete '{title}'? Por favor, especifique o dia e hora."
-            
-            # Processar o lembrete com título e tempo
-            return process_reminder(user_phone, title, time_str)
         
         # Se chegou aqui, não foi possível identificar a intenção específica
         logger.info(f"Reminder intent detected: {normalized_text.split()[0] if normalized_text else 'empty'}")

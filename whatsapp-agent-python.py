@@ -26,6 +26,7 @@ from agents.reminder_agent.reminder_db import (
     to_local_timezone, to_utc_timezone, format_datetime,
     BRAZIL_TIMEZONE
 )
+from agents.general_agent.general_agent import get_ai_response, handle_message, get_conversation_context
 
 # Configure logging
 logging.basicConfig(
@@ -984,213 +985,52 @@ def transcribe_audio(audio_url):
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    """Webhook endpoint for Twilio WhatsApp messages"""
     try:
-        sender_number = request.values.get('From', '')
-        # Extract the phone number without the "whatsapp:" prefix
-        user_phone = sender_number.replace('whatsapp:', '')
+        # Extract message details
+        from_number = request.values.get('From', '')
+        body = request.values.get('Body', '')
         num_media = int(request.values.get('NumMedia', 0))
         
-        # Debug logging
-        logger.info(f"Incoming message from {sender_number} with {num_media} media attachments")
+        # Log the incoming message
+        logger.info(f"Received message from {from_number}: {body[:50]}..." if len(body) > 50 else f"Received message from {from_number}: {body}")
         
-        # Check if this is an image
-        if num_media > 0 and request.values.get('MediaContentType0', '').startswith('image/'):
-            logger.info("Image message detected")
-            image_url = request.values.get('MediaUrl0', '')
-            logger.info(f"Image URL: {image_url}")
+        # Check for media
+        media_urls = []
+        for i in range(num_media):
+            media_url = request.values.get(f'MediaUrl{i}')
+            media_type = request.values.get(f'MediaContentType{i}')
             
-            # Store the user's image message
-            store_conversation(
-                user_phone=user_phone,
-                message_content=image_url,  # Store the URL of the image
-                message_type='image',
-                is_from_user=True
-            )
-            
-            # Process the image with GPT-4o
-            full_response = process_image(image_url)
-            
-            # Store the agent's response
-            store_conversation(
-                user_phone=user_phone,
-                message_content=full_response,
-                message_type='text',
-                is_from_user=False
-            )
-            
-        # Check if this is a voice message
-        elif num_media > 0 and request.values.get('MediaContentType0', '').startswith('audio/'):
-            logger.info("Voice message detected")
-            audio_url = request.values.get('MediaUrl0', '')
-            logger.info(f"Audio URL: {audio_url}")
-            
-            # Transcribe the audio
-            transcribed_text = transcribe_audio(audio_url)
-            logger.info(f"Transcription: {transcribed_text}")
-            
-            # Store the user's transcribed audio message
-            store_conversation(
-                user_phone=user_phone,
-                message_content=transcribed_text,  # Store the transcription instead of URL
-                message_type='audio',
-                is_from_user=True
-            )
-            
-            # Check if this is a reminder intent
-            logger.info(f"Checking for reminder intent in transcribed audio: '{transcribed_text[:50]}...' (truncated)")
-            is_reminder, action = detect_reminder_intent_with_llm(transcribed_text)
-            
-            if is_reminder:
-                logger.info(f"Reminder intent detected in audio: {action}")
-                
-                if action == "clarify":
-                    logger.info("Sending clarification message for ambiguous reminder intent in audio")
-                    # User mentioned "lembrete" but intent is unclear
-                    full_response = "O que você gostaria de fazer com seus lembretes? Você pode:\n\n" + \
-                                    "• Ver seus lembretes (envie 'meus lembretes')\n" + \
-                                    "• Criar um lembrete (ex: 'me lembra de pagar a conta amanhã')\n" + \
-                                    "• Cancelar um lembrete (ex: 'cancelar lembrete 2')"
-                    
-                    # Store the agent's response
-                    store_conversation(
-                        user_phone=user_phone,
-                        message_content=full_response,
-                        message_type='text',
-                        is_from_user=False
-                    )
-                    
-                    # Return the response
-                    resp = MessagingResponse()
-                    resp.message(full_response)
-                    return str(resp)
-                
-                # Handle the reminder intent
-                logger.info(f"Handling reminder intent: {action}")
-                start_time = time_module.time()
-                reminder_response = handle_reminder_intent(user_phone, transcribed_text)
-                elapsed_time = time_module.time() - start_time
-                
-                # Log the full response for debugging
-                logger.info(f"Reminder handling completed in {elapsed_time:.2f}s")
-                logger.info(f"Full reminder response: {reminder_response}")
-                
-                if reminder_response:
-                    # Store the agent's response
-                    store_conversation(
-                        user_phone=user_phone,
-                        message_content=reminder_response,
-                        message_type='text',
-                        is_from_user=False
-                    )
-                    
-                    # Return the response
-                    resp = MessagingResponse()
-                    resp.message(reminder_response)
-                    return str(resp)
-            else:
-                # Get AI response based on transcription
-                full_response = get_ai_response(transcribed_text, is_audio_transcription=True)
-            
-            # Store the agent's response
-            store_conversation(
-                user_phone=user_phone,
-                message_content=full_response,
-                message_type='text',
-                is_from_user=False
-            )
-            
+            if media_url:
+                media_urls.append((media_url, media_type))
+        
+        # Process the message
+        if num_media > 0:
+            # Handle media messages
+            response_text = handle_media_message(from_number, body, media_urls)
         else:
-            # Handle regular text message
-            incoming_msg = request.values.get('Body', '')
-            logger.info(f"Text message: {incoming_msg}")
-            
-            # Store the user's text message
-            store_conversation(
-                user_phone=user_phone,
-                message_content=incoming_msg,
-                message_type='text',
-                is_from_user=True
-            )
-            
-            # Check if this is a reminder intent
-            logger.info(f"Checking for reminder intent in message: '{incoming_msg[:50]}...' (truncated)")
-            is_reminder, action = detect_reminder_intent_with_llm(incoming_msg)
+            # Check for reminder intent
+            is_reminder, intent = detect_reminder_intent_with_llm(body)
             
             if is_reminder:
-                logger.info(f"Reminder intent detected: {action}")
-                
-                if action == "clarify":
-                    logger.info("Sending clarification message for ambiguous reminder intent")
-                    # User mentioned "lembrete" but intent is unclear
-                    full_response = "O que você gostaria de fazer com seus lembretes? Você pode:\n\n" + \
-                                    "• Ver seus lembretes (envie 'meus lembretes')\n" + \
-                                    "• Criar um lembrete (ex: 'me lembra de pagar a conta amanhã')\n" + \
-                                    "• Cancelar um lembrete (ex: 'cancelar lembrete 2')"
-                    
-                    # Store the agent's response
-                    store_conversation(
-                        user_phone=user_phone,
-                        message_content=full_response,
-                        message_type='text',
-                        is_from_user=False
-                    )
-                    
-                    # Return the response
-                    resp = MessagingResponse()
-                    resp.message(full_response)
-                    return str(resp)
-                
-                # Handle the reminder intent
-                logger.info(f"Handling reminder intent: {action}")
-                start_time = time_module.time()
-                reminder_response = handle_reminder_intent(user_phone, incoming_msg)
-                elapsed_time = time_module.time() - start_time
-                
-                # Log the full response for debugging
-                logger.info(f"Reminder handling completed in {elapsed_time:.2f}s")
-                logger.info(f"Full reminder response: {reminder_response}")
-                
-                if reminder_response:
-                    # Store the agent's response
-                    store_conversation(
-                        user_phone=user_phone,
-                        message_content=reminder_response,
-                        message_type='text',
-                        is_from_user=False
-                    )
-                    
-                    # Return the response
-                    resp = MessagingResponse()
-                    resp.message(reminder_response)
-                    return str(resp)
+                # Handle reminder intent
+                logger.info(f"Reminder intent detected: {intent}")
+                response_text = handle_reminder_intent(from_number, body)
             else:
-                # Get AI response for regular message
-                full_response = get_ai_response(incoming_msg)
-            
-            # Store the agent's response
-            store_conversation(
-                user_phone=user_phone,
-                message_content=full_response,
-                message_type='text',
-                is_from_user=False
-            )
+                # Handle general conversation
+                logger.info("No reminder intent detected, handling as general conversation")
+                response_text = handle_message(from_number, body)
         
-        # When sending the response, use our retry mechanism instead of Twilio's TwiML
-        # This is for asynchronous responses outside the webhook context
-        
-        # For webhook responses, we still use TwiML as it's more reliable in this context
+        # Create TwiML response
         resp = MessagingResponse()
-        resp.message(full_response)
+        resp.message(response_text)
         
-        logger.info(f"Sending response via webhook: {full_response[:50]}...")
         return str(resp)
-
+    
     except Exception as e:
-        logger.error(f"Error in webhook: {type(e).__name__} - {str(e)}")
-        
-        # Return a friendly error message in Portuguese
+        logger.error(f"Error in webhook: {str(e)}")
         resp = MessagingResponse()
-        resp.message("Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente mais tarde.")
+        resp.message("Desculpe, ocorreu um erro ao processar sua mensagem.")
         return str(resp)
 
 # ===== DIRECT MESSAGE ENDPOINT =====

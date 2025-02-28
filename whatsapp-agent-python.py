@@ -261,34 +261,40 @@ def detect_reminder_intent(message):
 def parse_reminder(message, action):
     """Extrai detalhes do lembrete usando GPT-4o-mini"""
     try:
+        # Get current time in Brazil timezone
+        brazil_tz = pytz.timezone('America/Sao_Paulo')
+        now_local = datetime.now(brazil_tz)
+        
         system_prompt = ""
         
         if action == "criar":
-            system_prompt = """
+            system_prompt = f"""
             Você é um assistente especializado em extrair informações de lembretes de mensagens em português.
+            
+            A hora atual no Brasil é: {now_local.strftime('%Y-%m-%d %H:%M')} (UTC-3)
             
             Extraia as informações de lembrete da mensagem do usuário.
             Se houver múltiplos lembretes, retorne um array de objetos.
             
             Retorne um JSON com o seguinte formato:
-            {
+            {{
               "reminders": [
-                {
+                {{
                   "title": "título ou assunto do lembrete",
-                  "date": "data do lembrete (formato YYYY-MM-DD, ou 'hoje', 'amanhã')",
-                  "time": "hora do lembrete (formato HH:MM)"
-                }
+                  "datetime": {{
+                    "year": ano (ex: 2025),
+                    "month": mês (1-12),
+                    "day": dia (1-31),
+                    "hour": hora em formato 24h (0-23),
+                    "minute": minuto (0-59)
+                  }}
+                }}
               ]
-            }
+            }}
             
-            Para tempos relativos como "daqui 5 minutos", "em 2 horas", "daqui 2h", coloque a expressão completa no campo "date" e deixe "time" vazio.
-            
-            Exemplos de expressões relativas que você deve reconhecer:
-            - "daqui 5 minutos" -> date: "daqui 5 minutos", time: null
-            - "daqui 2h" -> date: "daqui 2 horas", time: null
-            - "em 1 hora" -> date: "daqui 1 hora", time: null
-            
-            Se alguma informação estiver faltando, use null para o campo.
+            Para tempos relativos como "daqui 5 minutos", "em 2 horas", "daqui 2h", calcule a data e hora exatas.
+            Para expressões como "amanhã às 15h", determine a data e hora completas.
+            Para horários sem data, use hoje se o horário ainda não passou, caso contrário use amanhã.
             """
         elif action == "cancelar":
             system_prompt = """
@@ -310,224 +316,134 @@ def parse_reminder(message, action):
         parsed_response = json.loads(response.choices[0].message.content)
         logger.info(f"Parsed reminder data: {parsed_response}")
         
-        # Add fallback handling for old format responses
-        if action == "criar" and "reminders" not in parsed_response and "title" in parsed_response:
-            # Convert old format to new format
-            return {
-                "reminders": [
-                    {
-                        "title": parsed_response.get("title"),
-                        "date": parsed_response.get("date"),
-                        "time": parsed_response.get("time")
-                    }
-                ]
-            }
-            
+        # Process the datetime components for each reminder
+        if action == "criar" and "reminders" in parsed_response:
+            for reminder in parsed_response["reminders"]:
+                if "datetime" in reminder and isinstance(reminder["datetime"], dict):
+                    dt_components = reminder["datetime"]
+                    try:
+                        # Create datetime object from components
+                        dt = datetime(
+                            year=dt_components.get('year', now_local.year),
+                            month=dt_components.get('month', now_local.month),
+                            day=dt_components.get('day', now_local.day),
+                            hour=dt_components.get('hour', 12),
+                            minute=dt_components.get('minute', 0),
+                            second=0,
+                            microsecond=0
+                        )
+                        
+                        # Add timezone info (Brazil)
+                        dt = brazil_tz.localize(dt)
+                        
+                        # Convert to UTC
+                        dt_utc = dt.astimezone(timezone.utc)
+                        
+                        # Store the datetime object directly
+                        reminder["scheduled_time"] = dt_utc
+                        
+                    except (KeyError, ValueError) as e:
+                        logger.error(f"Error creating datetime from components: {str(e)}")
+                        # Fall back to tomorrow at noon
+                        tomorrow_noon = (now_local + timedelta(days=1)).replace(
+                            hour=12, minute=0, second=0, microsecond=0
+                        )
+                        reminder["scheduled_time"] = tomorrow_noon.astimezone(timezone.utc)
+        
         return parsed_response
     except Exception as e:
         logger.error(f"Error parsing reminder: {str(e)}")
         return None
 
-def parse_datetime(date_str, time_str):
-    """Converte strings de data e hora para um objeto datetime"""
+def parse_datetime_with_llm(date_str):
+    """Uses the LLM to parse natural language date/time expressions"""
     try:
-        # Get current time in Brazil timezone first
-        brazil_tz = pytz.timezone('America/Sao_Paulo')  # UTC-3
+        # Get current time in Brazil timezone
+        brazil_tz = pytz.timezone('America/Sao_Paulo')
         now_local = datetime.now(brazil_tz)
         
-        # Log the input for debugging
-        logger.info(f"parse_datetime input: date_str='{date_str}', time_str='{time_str}'")
+        logger.info(f"Parsing datetime expression with LLM: '{date_str}'")
         
-        # Verificar se temos valores nulos
-        if date_str is None:
-            # Se não tiver data, assumir hoje
-            date = now_local.date()
-        elif date_str.lower() == 'hoje':
-            date = now_local.date()
-        elif date_str.lower() == 'amanhã' or date_str.lower() == 'amanha':
-            date = (now_local + timedelta(days=1)).date()
-        else:
-            # Special case for relative time expressions
-            if isinstance(date_str, str):
-                date_str_lower = date_str.lower()
-                logger.info(f"Processing potential relative time expression: {date_str_lower}")
-                
-                # Handle "daqui X minutos/horas/dias"
-                daqui_match = re.search(r'daqui\s+(?:a\s+)?(\d+|um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez)\s*(minutos?|horas?|dias?|min|h)', date_str_lower)
-                if daqui_match:
-                    amount_str = daqui_match.group(1)
-                    unit = daqui_match.group(2)
-                    
-                    # Convert word numbers to digits
-                    number_map = {
-                        'um': 1, 'uma': 1, 'dois': 2, 'duas': 2, 'três': 3, 'tres': 3,
-                        'quatro': 4, 'cinco': 5, 'seis': 6, 'sete': 7, 'oito': 8, 'nove': 9, 'dez': 10
-                    }
-                    
-                    if amount_str in number_map:
-                        amount = number_map[amount_str]
-                    else:
-                        amount = int(amount_str)
-                        
-                    logger.info(f"Matched 'daqui' expression: amount={amount}, unit={unit}")
-                    
-                    if 'minuto' in unit or unit == 'min':
-                        result = now_local + timedelta(minutes=amount)
-                    elif 'hora' in unit or unit == 'h':
-                        result = now_local + timedelta(hours=amount)
-                    elif 'dia' in unit:
-                        result = now_local + timedelta(days=amount)
-                    else:
-                        result = now_local + timedelta(hours=1)  # Default
-                    
-                    # Convert to UTC and return
-                    logger.info(f"Calculated relative time: {result} (local)")
-                    return result.astimezone(timezone.utc)
-                
-                # Handle "em X minutos/horas/dias"
-                em_match = re.search(r'em\s+(\d+|um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez)\s*(minutos?|horas?|dias?|min|h)', date_str_lower)
-                if em_match:
-                    amount_str = em_match.group(1)
-                    unit = em_match.group(2)
-                    
-                    # Convert word numbers to digits
-                    number_map = {
-                        'um': 1, 'uma': 1, 'dois': 2, 'duas': 2, 'três': 3, 'tres': 3,
-                        'quatro': 4, 'cinco': 5, 'seis': 6, 'sete': 7, 'oito': 8, 'nove': 9, 'dez': 10
-                    }
-                    
-                    if amount_str in number_map:
-                        amount = number_map[amount_str]
-                    else:
-                        amount = int(amount_str)
-                        
-                    logger.info(f"Matched 'em' expression: amount={amount}, unit={unit}")
-                    
-                    if 'minuto' in unit or unit == 'min':
-                        result = now_local + timedelta(minutes=amount)
-                    elif 'hora' in unit or unit == 'h':
-                        result = now_local + timedelta(hours=amount)
-                    elif 'dia' in unit:
-                        result = now_local + timedelta(days=amount)
-                    else:
-                        result = now_local + timedelta(hours=1)  # Default
-                    
-                    # Convert to UTC and return
-                    logger.info(f"Calculated relative time: {result} (local)")
-                    return result.astimezone(timezone.utc)
-                
-                # Handle "às X horas"
-                as_match = re.search(r'(?:às|as|em)\s+(\d+|meia\s+noite|meio\s+dia)(?::(\d+))?(?:\s*(da\s+manhã|da\s+tarde|da\s+noite))?', date_str_lower)
-                if as_match:
-                    hour_str = as_match.group(1)
-                    minute_str = as_match.group(2)
-                    period = as_match.group(3) if as_match.group(3) else None
-                    
-                    # Handle special cases
-                    if hour_str == 'meia noite':
-                        hour = 0
-                    elif hour_str == 'meio dia':
-                        hour = 12
-                    else:
-                        hour = int(hour_str)
-                    
-                    # Adjust for period of day
-                    if period:
-                        if 'tarde' in period and hour < 12:
-                            hour += 12
-                        elif 'noite' in period and hour < 12:
-                            hour += 12
-                    
-                    minute = int(minute_str) if minute_str else 0
-                    
-                    # Create datetime with today's date and specified time
-                    dt = datetime.combine(now_local.date(), time(hour=hour, minute=minute))
-                    dt = brazil_tz.localize(dt)
-                    
-                    # If the time is already past for today, use tomorrow
-                    if dt < now_local:
-                        dt = dt + timedelta(days=1)
-                    
-                    logger.info(f"Parsed time expression 'às': {dt}")
-                    return dt.astimezone(timezone.utc)
-                
-                # Handle specific day of month
-                day_match = re.search(r'dia\s+(\d+)', date_str_lower)
-                if day_match:
-                    day = int(day_match.group(1))
-                    
-                    # Create a date for the specified day in current month
-                    try:
-                        date = now_local.date().replace(day=day)
-                        
-                        # If the day is in the past this month, use next month
-                        if date < now_local.date():
-                            if now_local.month == 12:
-                                date = date.replace(year=now_local.year + 1, month=1)
-                            else:
-                                date = date.replace(month=now_local.month + 1)
-                    except ValueError:
-                        # Handle invalid days (e.g., February 30)
-                        logger.warning(f"Invalid day of month: {day}")
-                        date = now_local.date() + timedelta(days=1)  # Default to tomorrow
+        # If it's already a datetime object, just return it
+        if isinstance(date_str, datetime):
+            if date_str.tzinfo is None:
+                date_str = brazil_tz.localize(date_str)
+            return date_str.astimezone(timezone.utc)
             
-            # If no relative time pattern matched, try as specific date
-            if not isinstance(date, datetime):
-                try:
-                    # Tentar formato YYYY-MM-DD
-                    date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                except ValueError:
-                    try:
-                        # Tentar formato DD/MM/YYYY
-                        date = datetime.strptime(date_str, "%d/%m/%Y").date()
-                    except ValueError:
-                        # Se falhar, usar amanhã como padrão
-                        logger.warning(f"Could not parse date: {date_str}, using tomorrow")
-                        date = (now_local + timedelta(days=1)).date()
+        # If it's None or empty, return tomorrow at noon
+        if not date_str:
+            tomorrow_noon = (now_local + timedelta(days=1)).replace(
+                hour=12, minute=0, second=0, microsecond=0
+            )
+            return tomorrow_noon.astimezone(timezone.utc)
         
-        # If we already have a complete datetime, return it
-        if isinstance(date, datetime):
-            # Ensure it's in the local timezone
-            if date.tzinfo is None:
-                date = brazil_tz.localize(date)
-            # Convert to UTC for storage
-            return date.astimezone(timezone.utc)
+        # Use the LLM to parse the date/time expression
+        system_prompt = f"""
+        You are a datetime parsing assistant. Convert the given natural language time expression to a specific date and time.
         
-        # Process time if provided
-        if time_str:
-            # Check for HH:MM format
-            if ':' in time_str:
-                time_parts = time_str.split(':')
-                hour = int(time_parts[0])
-                minute = int(time_parts[1]) if len(time_parts) > 1 else 0
-            else:
-                # Try to interpret as just hours
-                try:
-                    hour = int(time_str)
-                    minute = 0
-                except ValueError:
-                    # Default time: noon
-                    hour = 12
-                    minute = 0
+        Current local time in Brazil: {now_local.strftime('%Y-%m-%d %H:%M')} (UTC-3)
+        
+        Return a JSON with these fields:
+        - year: the year (e.g., 2025)
+        - month: the month (1-12)
+        - day: the day (1-31)
+        - hour: the hour in 24-hour format (0-23)
+        - minute: the minute (0-59)
+        - relative: boolean indicating if this was a relative time expression
+        
+        For relative times like "daqui 5 minutos" or "em 2 horas", calculate the exact target time.
+        For expressions like "amanhã às 15h", determine the complete date and time.
+        For times without dates, use today if the time hasn't passed yet, otherwise use tomorrow.
+        """
+        
+        response = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": date_str}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1
+        )
+        
+        parsed = json.loads(response.choices[0].message.content)
+        logger.info(f"LLM parsed datetime: {parsed}")
+        
+        # Create datetime object from parsed components
+        try:
+            dt = datetime(
+                year=parsed['year'],
+                month=parsed['month'],
+                day=parsed['day'],
+                hour=parsed['hour'],
+                minute=parsed['minute'],
+                second=0,
+                microsecond=0
+            )
             
-            # Create combined datetime in local timezone
-            dt = datetime.combine(date, time(hour=hour, minute=minute))
-            
-            # Add local timezone
+            # Add timezone info (Brazil)
             dt = brazil_tz.localize(dt)
             
-            # Convert to UTC for storage
-            return dt.astimezone(timezone.utc)
-        else:
-            # If no time provided, use noon
-            dt = datetime.combine(date, time(hour=12, minute=0))
-            dt = brazil_tz.localize(dt)
-            return dt.astimezone(timezone.utc)
+            # Convert to UTC
+            dt_utc = dt.astimezone(timezone.utc)
+            logger.info(f"Final datetime (UTC): {dt_utc}")
+            
+            return dt_utc
+            
+        except (KeyError, ValueError) as e:
+            logger.error(f"Error creating datetime from LLM response: {str(e)}")
+            # Fall back to tomorrow at noon
+            tomorrow_noon = (now_local + timedelta(days=1)).replace(
+                hour=12, minute=0, second=0, microsecond=0
+            )
+            return tomorrow_noon.astimezone(timezone.utc)
             
     except Exception as e:
-        logger.error(f"Error parsing datetime: {str(e)}")
+        logger.error(f"Error in parse_datetime_with_llm: {str(e)}")
         # Return default time (tomorrow at noon)
-        tomorrow_noon = (datetime.now(brazil_tz) + timedelta(days=1)).replace(
+        brazil_tz = pytz.timezone('America/Sao_Paulo')
+        now_local = datetime.now(brazil_tz)
+        tomorrow_noon = (now_local + timedelta(days=1)).replace(
             hour=12, minute=0, second=0, microsecond=0
         )
         return tomorrow_noon.astimezone(timezone.utc)
@@ -640,29 +556,18 @@ def handle_reminder_intent(user_phone, message_text):
                 
                 for reminder in reminder_data["reminders"]:
                     logger.info(f"Processing reminder: {reminder}")
-                    if "title" in reminder:
-                        # Converter data/hora para timestamp
-                        date_value = reminder.get("date", "hoje")
-                        time_value = reminder.get("time", None)
-                        logger.info(f"Parsing datetime with date={date_value}, time={time_value}")
+                    if "title" in reminder and "scheduled_time" in reminder:
+                        # Criar o lembrete
+                        reminder_id = create_reminder(user_phone, reminder["title"], reminder["scheduled_time"])
+                        logger.info(f"Created reminder with ID: {reminder_id}")
                         
-                        try:
-                            scheduled_time = parse_datetime(date_value, time_value)
-                            logger.info(f"Scheduled time after parsing: {scheduled_time}")
-                            
-                            # Criar o lembrete
-                            reminder_id = create_reminder(user_phone, reminder["title"], scheduled_time)
-                            logger.info(f"Created reminder with ID: {reminder_id}")
-                            
-                            if reminder_id:
-                                created_reminders.append({
-                                    "title": reminder["title"],
-                                    "time": scheduled_time
-                                })
-                            else:
-                                logger.error(f"Failed to create reminder: {reminder}")
-                        except Exception as e:
-                            logger.error(f"Error parsing datetime or creating reminder: {str(e)}")
+                        if reminder_id:
+                            created_reminders.append({
+                                "title": reminder["title"],
+                                "time": reminder["scheduled_time"]
+                            })
+                        else:
+                            logger.error(f"Failed to create reminder: {reminder}")
                 
                 # Formatar resposta para múltiplos lembretes
                 if created_reminders:
@@ -803,7 +708,7 @@ def process_reminder(user_phone, title, time_str):
     """Processa a criação de um novo lembrete"""
     try:
         # Converter data/hora para timestamp
-        scheduled_time = parse_datetime(time_str, None)
+        scheduled_time = parse_datetime_with_llm(time_str)
         
         # Criar o lembrete
         reminder_id = create_reminder(user_phone, title, scheduled_time)
@@ -1065,7 +970,7 @@ def webhook():
                     reminder_data = parse_reminder(transcribed_text, action)
                     if reminder_data and 'title' in reminder_data and 'date' in reminder_data:
                         # Converter data/hora para timestamp
-                        scheduled_time = parse_datetime(
+                        scheduled_time = parse_datetime_with_llm(
                             reminder_data.get('date', 'amanhã'), 
                             reminder_data.get('time', '12:00')
                         )

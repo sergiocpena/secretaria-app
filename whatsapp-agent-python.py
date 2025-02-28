@@ -496,21 +496,26 @@ def handle_reminder_intent(user_phone, message_text):
         if is_create_request:
             # Extrair detalhes dos lembretes
             reminder_data = parse_reminder(normalized_text, "criar")
+            logger.info(f"Reminder data after parsing: {reminder_data}")
             
             if reminder_data and "reminders" in reminder_data and reminder_data["reminders"]:
                 # Processar múltiplos lembretes
                 created_reminders = []
                 
                 for reminder in reminder_data["reminders"]:
+                    logger.info(f"Processing reminder: {reminder}")
                     if "title" in reminder:
                         # Converter data/hora para timestamp
-                        scheduled_time = parse_datetime(
-                            reminder.get("date", "hoje"), 
-                            reminder.get("time", None)
-                        )
+                        date_value = reminder.get("date", "hoje")
+                        time_value = reminder.get("time", None)
+                        logger.info(f"Parsing datetime with date={date_value}, time={time_value}")
+                        
+                        scheduled_time = parse_datetime(date_value, time_value)
+                        logger.info(f"Scheduled time after parsing: {scheduled_time}")
                         
                         # Criar o lembrete
                         reminder_id = create_reminder(user_phone, reminder["title"], scheduled_time)
+                        logger.info(f"Created reminder with ID: {reminder_id}")
                         
                         if reminder_id:
                             created_reminders.append({
@@ -529,8 +534,12 @@ def handle_reminder_intent(user_phone, message_text):
                             response += f"{i}. *{reminder['title']}* - {format_datetime(reminder['time'])}\n"
                         return response
                 else:
+                    logger.error("Failed to create any reminders despite valid parsing")
                     return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
-            
+            else:
+                logger.error(f"Invalid reminder data structure: {reminder_data}")
+                return "❌ Não consegui entender os detalhes do lembrete. Por favor, tente novamente com mais informações."
+        
         # Verificar se é uma solicitação para cancelar um lembrete
         cancel_keywords = ["cancelar", "remover", "apagar", "deletar"]
         is_cancel_request = any(keyword in normalized_text for keyword in cancel_keywords)

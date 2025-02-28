@@ -29,11 +29,27 @@ from agents.reminder_agent.reminder_db import (
 from agents.general_agent.general_agent import get_ai_response, handle_message, get_conversation_context
 
 # Configure logging
+log_level = os.getenv('LOG_LEVEL', 'INFO')
+health_log_level = os.getenv('HEALTH_LOG_LEVEL', 'DEBUG')
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Configure health check logger
+health_logger = logging.getLogger('health_checks')
+health_logger.setLevel(getattr(logging, health_log_level))
+
+# Add this after your logging configuration
+class HealthCheckFilter(logging.Filter):
+    def filter(self, record):
+        # Filter out health check logs
+        return 'Health check at' not in record.getMessage()
+
+# Apply the filter to the root logger
+logging.getLogger().addFilter(HealthCheckFilter())
 
 # Load environment variables
 load_dotenv()
@@ -1379,6 +1395,8 @@ except Exception as e:
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint for Render"""
+    # Use the health logger instead of the main logger
+    health_logger.debug(f"Health check at {datetime.now().isoformat()}")
     return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
 
 if __name__ == '__main__':

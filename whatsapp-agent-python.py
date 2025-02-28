@@ -265,6 +265,8 @@ def parse_reminder(message, action):
         
         if action == "criar":
             system_prompt = """
+            Você é um assistente especializado em extrair informações de lembretes de mensagens em português.
+            
             Extraia as informações de lembrete da mensagem do usuário.
             Se houver múltiplos lembretes, retorne um array de objetos.
             
@@ -279,7 +281,13 @@ def parse_reminder(message, action):
               ]
             }
             
-            Para tempos relativos como "daqui 5 minutos" ou "daqui 2h", coloque a expressão completa no campo "date" e deixe "time" vazio.
+            Para tempos relativos como "daqui 5 minutos", "em 2 horas", "daqui 2h", coloque a expressão completa no campo "date" e deixe "time" vazio.
+            
+            Exemplos de expressões relativas que você deve reconhecer:
+            - "daqui 5 minutos" -> date: "daqui 5 minutos", time: null
+            - "daqui 2h" -> date: "daqui 2 horas", time: null
+            - "em 1 hora" -> date: "daqui 1 hora", time: null
+            
             Se alguma informação estiver faltando, use null para o campo.
             """
         elif action == "cancelar":
@@ -295,10 +303,12 @@ def parse_reminder(message, action):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message}
             ],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            temperature=0.1  # Lower temperature for more consistent parsing
         )
         
         parsed_response = json.loads(response.choices[0].message.content)
+        logger.info(f"Parsed reminder data: {parsed_response}")
         
         # Add fallback handling for old format responses
         if action == "criar" and "reminders" not in parsed_response and "title" in parsed_response:
@@ -316,22 +326,6 @@ def parse_reminder(message, action):
         return parsed_response
     except Exception as e:
         logger.error(f"Error parsing reminder: {str(e)}")
-        # Provide a basic fallback for simple reminders
-        if action == "criar" and "daqui" in message.lower():
-            # Try to extract a basic reminder with regex
-            match = re.search(r'(?:lembr\w+|me\s+lembr\w+)(?:\s+de)?(?:\s+que)?(?:\s+eu)?(?:\s+tenho)?(?:\s+que)?\s+(.+?)(?:\s+(?:daqui|em|às|as|no dia|na|no|para)\s+(.+))?$', message.lower())
-            if match:
-                title = match.group(1).strip()
-                time_expr = match.group(2).strip() if match.group(2) else "daqui 1 hora"
-                return {
-                    "reminders": [
-                        {
-                            "title": title,
-                            "date": time_expr,
-                            "time": None
-                        }
-                    ]
-                }
         return None
 
 def parse_datetime(date_str, time_str):
@@ -351,14 +345,27 @@ def parse_datetime(date_str, time_str):
             date = (now_local + timedelta(days=1)).date()
         else:
             # Tentar interpretar expressões relativas como "daqui X minutos/horas/dias"
-            relative_match = re.search(r'daqui\s+(\d+)\s+(minutos?|horas?|dias?)', date_str.lower())
+            relative_match = re.search(r'daqui\s+(\d+)\s*(minutos?|horas?|dias?|min|h)', date_str.lower())
             if relative_match:
                 amount = int(relative_match.group(1))
                 unit = relative_match.group(2)
                 
-                if 'minuto' in unit:
+                if 'minuto' in unit or unit == 'min':
                     return now_local + timedelta(minutes=amount)
-                elif 'hora' in unit:
+                elif 'hora' in unit or unit == 'h':
+                    return now_local + timedelta(hours=amount)
+                elif 'dia' in unit:
+                    return now_local + timedelta(days=amount)
+            
+            # Try to match "em X horas/minutos"
+            em_match = re.search(r'em\s+(\d+)\s*(minutos?|horas?|dias?|min|h)', date_str.lower())
+            if em_match:
+                amount = int(em_match.group(1))
+                unit = em_match.group(2)
+                
+                if 'minuto' in unit or unit == 'min':
+                    return now_local + timedelta(minutes=amount)
+                elif 'hora' in unit or unit == 'h':
                     return now_local + timedelta(hours=amount)
                 elif 'dia' in unit:
                     return now_local + timedelta(days=amount)

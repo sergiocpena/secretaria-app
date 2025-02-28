@@ -11,7 +11,7 @@ import time
 import base64
 from supabase import create_client
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time
 import re
 import queue
 import logging
@@ -347,15 +347,29 @@ def parse_datetime(date_str, time_str):
         elif date_str.lower() == 'amanhã' or date_str.lower() == 'amanha':
             date = (now_local + timedelta(days=1)).date()
         else:
-            # Special case for "daqui X horas/minutos"
-            if isinstance(date_str, str) and "daqui" in date_str.lower():
-                logger.info(f"Processing relative time expression: {date_str}")
-                # Tentar interpretar expressões relativas como "daqui X minutos/horas/dias"
-                relative_match = re.search(r'daqui\s+(\d+)\s*(minutos?|horas?|dias?|min|h)', date_str.lower())
-                if relative_match:
-                    amount = int(relative_match.group(1))
-                    unit = relative_match.group(2)
-                    logger.info(f"Matched relative time: amount={amount}, unit={unit}")
+            # Special case for relative time expressions
+            if isinstance(date_str, str):
+                date_str_lower = date_str.lower()
+                logger.info(f"Processing potential relative time expression: {date_str_lower}")
+                
+                # Handle "daqui X minutos/horas/dias"
+                daqui_match = re.search(r'daqui\s+(?:a\s+)?(\d+|um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez)\s*(minutos?|horas?|dias?|min|h)', date_str_lower)
+                if daqui_match:
+                    amount_str = daqui_match.group(1)
+                    unit = daqui_match.group(2)
+                    
+                    # Convert word numbers to digits
+                    number_map = {
+                        'um': 1, 'uma': 1, 'dois': 2, 'duas': 2, 'três': 3, 'tres': 3,
+                        'quatro': 4, 'cinco': 5, 'seis': 6, 'sete': 7, 'oito': 8, 'nove': 9, 'dez': 10
+                    }
+                    
+                    if amount_str in number_map:
+                        amount = number_map[amount_str]
+                    else:
+                        amount = int(amount_str)
+                        
+                    logger.info(f"Matched 'daqui' expression: amount={amount}, unit={unit}")
                     
                     if 'minuto' in unit or unit == 'min':
                         result = now_local + timedelta(minutes=amount)
@@ -369,41 +383,150 @@ def parse_datetime(date_str, time_str):
                     # Convert to UTC and return
                     logger.info(f"Calculated relative time: {result} (local)")
                     return result.astimezone(timezone.utc)
+                
+                # Handle "em X minutos/horas/dias"
+                em_match = re.search(r'em\s+(\d+|um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez)\s*(minutos?|horas?|dias?|min|h)', date_str_lower)
+                if em_match:
+                    amount_str = em_match.group(1)
+                    unit = em_match.group(2)
+                    
+                    # Convert word numbers to digits
+                    number_map = {
+                        'um': 1, 'uma': 1, 'dois': 2, 'duas': 2, 'três': 3, 'tres': 3,
+                        'quatro': 4, 'cinco': 5, 'seis': 6, 'sete': 7, 'oito': 8, 'nove': 9, 'dez': 10
+                    }
+                    
+                    if amount_str in number_map:
+                        amount = number_map[amount_str]
+                    else:
+                        amount = int(amount_str)
+                        
+                    logger.info(f"Matched 'em' expression: amount={amount}, unit={unit}")
+                    
+                    if 'minuto' in unit or unit == 'min':
+                        result = now_local + timedelta(minutes=amount)
+                    elif 'hora' in unit or unit == 'h':
+                        result = now_local + timedelta(hours=amount)
+                    elif 'dia' in unit:
+                        result = now_local + timedelta(days=amount)
+                    else:
+                        result = now_local + timedelta(hours=1)  # Default
+                    
+                    # Convert to UTC and return
+                    logger.info(f"Calculated relative time: {result} (local)")
+                    return result.astimezone(timezone.utc)
+                
+                # Handle "às X horas"
+                as_match = re.search(r'(?:às|as|em)\s+(\d+|meia\s+noite|meio\s+dia)(?::(\d+))?(?:\s*(da\s+manhã|da\s+tarde|da\s+noite))?', date_str_lower)
+                if as_match:
+                    hour_str = as_match.group(1)
+                    minute_str = as_match.group(2)
+                    period = as_match.group(3) if as_match.group(3) else None
+                    
+                    # Handle special cases
+                    if hour_str == 'meia noite':
+                        hour = 0
+                    elif hour_str == 'meio dia':
+                        hour = 12
+                    else:
+                        hour = int(hour_str)
+                    
+                    # Adjust for period of day
+                    if period:
+                        if 'tarde' in period and hour < 12:
+                            hour += 12
+                        elif 'noite' in period and hour < 12:
+                            hour += 12
+                    
+                    minute = int(minute_str) if minute_str else 0
+                    
+                    # Create datetime with today's date and specified time
+                    dt = datetime.combine(now_local.date(), time(hour=hour, minute=minute))
+                    dt = brazil_tz.localize(dt)
+                    
+                    # If the time is already past for today, use tomorrow
+                    if dt < now_local:
+                        dt = dt + timedelta(days=1)
+                    
+                    logger.info(f"Parsed time expression 'às': {dt}")
+                    return dt.astimezone(timezone.utc)
+                
+                # Handle specific day of month
+                day_match = re.search(r'dia\s+(\d+)', date_str_lower)
+                if day_match:
+                    day = int(day_match.group(1))
+                    
+                    # Create a date for the specified day in current month
+                    try:
+                        date = now_local.date().replace(day=day)
+                        
+                        # If the day is in the past this month, use next month
+                        if date < now_local.date():
+                            if now_local.month == 12:
+                                date = date.replace(year=now_local.year + 1, month=1)
+                            else:
+                                date = date.replace(month=now_local.month + 1)
+                    except ValueError:
+                        # Handle invalid days (e.g., February 30)
+                        logger.warning(f"Invalid day of month: {day}")
+                        date = now_local.date() + timedelta(days=1)  # Default to tomorrow
+            
+            # If no relative time pattern matched, try as specific date
+            if not isinstance(date, datetime):
+                try:
+                    # Tentar formato YYYY-MM-DD
+                    date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except ValueError:
+                    try:
+                        # Tentar formato DD/MM/YYYY
+                        date = datetime.strptime(date_str, "%d/%m/%Y").date()
+                    except ValueError:
+                        # Se falhar, usar amanhã como padrão
+                        logger.warning(f"Could not parse date: {date_str}, using tomorrow")
+                        date = (now_local + timedelta(days=1)).date()
         
-        # Processar a hora se fornecida
+        # If we already have a complete datetime, return it
+        if isinstance(date, datetime):
+            # Ensure it's in the local timezone
+            if date.tzinfo is None:
+                date = brazil_tz.localize(date)
+            # Convert to UTC for storage
+            return date.astimezone(timezone.utc)
+        
+        # Process time if provided
         if time_str:
-            # Verificar formato HH:MM
+            # Check for HH:MM format
             if ':' in time_str:
                 time_parts = time_str.split(':')
                 hour = int(time_parts[0])
                 minute = int(time_parts[1]) if len(time_parts) > 1 else 0
             else:
-                # Tentar interpretar como apenas horas
+                # Try to interpret as just hours
                 try:
                     hour = int(time_str)
                     minute = 0
                 except ValueError:
-                    # Hora padrão: meio-dia
+                    # Default time: noon
                     hour = 12
                     minute = 0
             
-            # Criar o datetime combinado no fuso horário local
-            dt = datetime.combine(date, datetime.min.time().replace(hour=hour, minute=minute))
+            # Create combined datetime in local timezone
+            dt = datetime.combine(date, time(hour=hour, minute=minute))
             
-            # Adicionar timezone local
+            # Add local timezone
             dt = brazil_tz.localize(dt)
             
-            # Converter para UTC para armazenamento
+            # Convert to UTC for storage
             return dt.astimezone(timezone.utc)
         else:
-            # Se não houver hora, usar meio-dia
-            dt = datetime.combine(date, datetime.min.time().replace(hour=12, minute=0))
+            # If no time provided, use noon
+            dt = datetime.combine(date, time(hour=12, minute=0))
             dt = brazil_tz.localize(dt)
             return dt.astimezone(timezone.utc)
             
     except Exception as e:
         logger.error(f"Error parsing datetime: {str(e)}")
-        # Retornar data/hora padrão (amanhã ao meio-dia)
+        # Return default time (tomorrow at noon)
         tomorrow_noon = (datetime.now(brazil_tz) + timedelta(days=1)).replace(
             hour=12, minute=0, second=0, microsecond=0
         )

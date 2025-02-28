@@ -275,16 +275,11 @@ def parse_reminder(message, action):
                   "title": "título ou assunto do lembrete",
                   "date": "data do lembrete (formato YYYY-MM-DD, ou 'hoje', 'amanhã')",
                   "time": "hora do lembrete (formato HH:MM)"
-                },
-                {
-                  "title": "título do segundo lembrete",
-                  "date": "data do segundo lembrete",
-                  "time": "hora do segundo lembrete"
                 }
               ]
             }
             
-            Para tempos relativos como "daqui 5 minutos", coloque a expressão completa no campo "date" e deixe "time" vazio.
+            Para tempos relativos como "daqui 5 minutos" ou "daqui 2h", coloque a expressão completa no campo "date" e deixe "time" vazio.
             Se alguma informação estiver faltando, use null para o campo.
             """
         elif action == "cancelar":
@@ -303,9 +298,40 @@ def parse_reminder(message, action):
             response_format={"type": "json_object"}
         )
         
-        return json.loads(response.choices[0].message.content)
+        parsed_response = json.loads(response.choices[0].message.content)
+        
+        # Add fallback handling for old format responses
+        if action == "criar" and "reminders" not in parsed_response and "title" in parsed_response:
+            # Convert old format to new format
+            return {
+                "reminders": [
+                    {
+                        "title": parsed_response.get("title"),
+                        "date": parsed_response.get("date"),
+                        "time": parsed_response.get("time")
+                    }
+                ]
+            }
+            
+        return parsed_response
     except Exception as e:
         logger.error(f"Error parsing reminder: {str(e)}")
+        # Provide a basic fallback for simple reminders
+        if action == "criar" and "daqui" in message.lower():
+            # Try to extract a basic reminder with regex
+            match = re.search(r'(?:lembr\w+|me\s+lembr\w+)(?:\s+de)?(?:\s+que)?(?:\s+eu)?(?:\s+tenho)?(?:\s+que)?\s+(.+?)(?:\s+(?:daqui|em|às|as|no dia|na|no|para)\s+(.+))?$', message.lower())
+            if match:
+                title = match.group(1).strip()
+                time_expr = match.group(2).strip() if match.group(2) else "daqui 1 hora"
+                return {
+                    "reminders": [
+                        {
+                            "title": title,
+                            "date": time_expr,
+                            "time": None
+                        }
+                    ]
+                }
         return None
 
 def parse_datetime(date_str, time_str):

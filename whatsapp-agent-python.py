@@ -243,7 +243,9 @@ def detect_reminder_intent(message):
             return True, "listar"
     
     # Verificação de cancelamento de lembretes
-    cancel_keywords = ["cancelar lembrete", "apagar lembrete", "remover lembrete", "deletar lembrete"]
+    cancel_keywords = ["cancelar lembrete", "apagar lembrete", "remover lembrete", "deletar lembrete", 
+                       "excluir lembrete", "cancelar lembretes", "apagar lembretes", "remover lembretes", 
+                       "deletar lembretes", "excluir lembretes"]
     for keyword in cancel_keywords:
         if keyword in message_lower:
             return True, "cancelar"
@@ -306,7 +308,7 @@ def parse_reminder(message, action):
             
             Retorne um JSON com o seguinte formato:
             {
-              "cancel_type": "number" ou "title" ou "range",
+              "cancel_type": "number" ou "title" ou "range" ou "all",
               "numbers": [lista de números mencionados] (se cancel_type for "number" ou "range"),
               "range_start": número inicial (se cancel_type for "range"),
               "range_end": número final (se cancel_type for "range"),
@@ -319,6 +321,8 @@ def parse_reminder(message, action):
             - "cancelar lembretes 1 a 3" → {"cancel_type": "range", "range_start": 1, "range_end": 3}
             - "cancelar os três primeiros lembretes" → {"cancel_type": "range", "range_start": 1, "range_end": 3}
             - "cancelar lembrete reunião" → {"cancel_type": "title", "title": "reunião"}
+            - "cancelar todos os lembretes" → {"cancel_type": "all"}
+            - "excluir todos os lembretes" → {"cancel_type": "all"}
             """
         
         response = openai.ChatCompletion.create(
@@ -672,8 +676,22 @@ def handle_reminder_intent(user_phone, message_text):
                     logger.info(f"Successfully canceled reminder {reminder['id']} by title for user {user_phone}")
                 except Exception as e:
                     logger.error(f"Error cancelling reminder {reminder['id']}: {str(e)}")
-            else:
-                logger.warning(f"Unknown cancel_type: {cancel_data.get('cancel_type')}")
+            
+            elif cancel_data.get("cancel_type") == "all":
+                # Cancel all reminders
+                logger.info(f"Cancelling all reminders for user {user_phone}")
+                
+                for reminder in reminders:
+                    try:
+                        update_result = supabase.table('reminders') \
+                            .update({'is_active': False}) \
+                            .eq('id', reminder['id']) \
+                            .execute()
+                        
+                        cancelled_reminders.append(reminder)
+                        logger.info(f"Successfully canceled reminder {reminder['id']} (all cancellation) for user {user_phone}")
+                    except Exception as e:
+                        logger.error(f"Error cancelling reminder {reminder['id']}: {str(e)}")
             
             # Format response for cancelled reminders
             logger.info(f"Cancelled {len(cancelled_reminders)} reminders in total")

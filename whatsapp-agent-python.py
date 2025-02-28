@@ -7,7 +7,7 @@ import os
 import requests
 from dotenv import load_dotenv
 import threading
-import time
+import time as time_module  # Rename to avoid conflict with datetime.time
 import base64
 from supabase import create_client
 import json
@@ -134,7 +134,7 @@ def message_sender_worker():
                     logger.info(f"Scheduling retry {retry_count + 1}/{MAX_RETRIES} in {RETRY_DELAY} seconds")
                     
                     # Wait before retrying
-                    time.sleep(RETRY_DELAY)
+                    time_module.sleep(RETRY_DELAY)
                     message_queue.put(message_data)
                 else:
                     logger.error(f"Failed to send message after {MAX_RETRIES} attempts")
@@ -183,7 +183,7 @@ def ping_self():
             logger.error(f"Self-ping failed: {str(e)}")
         
         # Sleep for 10 minutes (600 seconds)
-        time.sleep(600)
+        time_module.sleep(600)
 
 # Start the self-ping in a background thread
 def start_self_ping():
@@ -845,7 +845,7 @@ def start_reminder_checker():
         while True:
             try:
                 # Dormir primeiro
-                time.sleep(check_interval)
+                time_module.sleep(check_interval)
                 
                 # Depois verificar os lembretes
                 logger.info("Running backup reminder check")
@@ -1017,9 +1017,9 @@ def webhook():
                 
                 # Handle the reminder intent
                 logger.info(f"Handling reminder intent: {action}")
-                start_time = time.time()
+                start_time = time_module.time()
                 reminder_response = handle_reminder_intent(user_phone, transcribed_text)
-                elapsed_time = time.time() - start_time
+                elapsed_time = time_module.time() - start_time
                 
                 # Log the full response for debugging
                 logger.info(f"Reminder handling completed in {elapsed_time:.2f}s")
@@ -1093,9 +1093,9 @@ def webhook():
                 
                 # Handle the reminder intent
                 logger.info(f"Handling reminder intent: {action}")
-                start_time = time.time()
+                start_time = time_module.time()
                 reminder_response = handle_reminder_intent(user_phone, incoming_msg)
-                elapsed_time = time.time() - start_time
+                elapsed_time = time_module.time() - start_time
                 
                 # Log the full response for debugging
                 logger.info(f"Reminder handling completed in {elapsed_time:.2f}s")
@@ -1370,7 +1370,7 @@ def detect_reminder_intent_with_llm(message):
         - "como está o tempo hoje?" → {"is_reminder": false, "intent": null}
         """
         
-        start_time = time.time()
+        start_time = time_module.time()
         response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[
@@ -1380,7 +1380,7 @@ def detect_reminder_intent_with_llm(message):
             response_format={"type": "json_object"},
             temperature=0.1
         )
-        elapsed_time = time.time() - start_time
+        elapsed_time = time_module.time() - start_time
         
         result = json.loads(response.choices[0].message.content)
         logger.info(f"LLM intent detection result: {result} (took {elapsed_time:.2f}s)")

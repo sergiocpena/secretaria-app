@@ -96,10 +96,12 @@ def message_sender_worker():
     while True:
         try:
             # Get message from queue (blocks until a message is available)
+            logger.info("Message sender worker waiting for messages...")
             message_data = message_queue.get()
             
             if message_data is None:
                 # None is used as a signal to stop the thread
+                logger.info("Message sender worker received stop signal")
                 break
                 
             to_number = message_data['to']
@@ -107,27 +109,33 @@ def message_sender_worker():
             retry_count = message_data.get('retry_count', 0)
             message_sid = message_data.get('message_sid')
             
+            logger.info(f"Processing message from queue: to={to_number}, retry_count={retry_count}")
+            
             try:
                 # If we have a message_sid, check its status first
                 if message_sid:
+                    logger.info(f"Checking status of previous message {message_sid}")
                     message = twilio_client.messages(message_sid).fetch()
+                    logger.info(f"Previous message status: {message.status}")
                     if message.status in ['delivered', 'read']:
                         logger.info(f"Message {message_sid} already delivered, skipping retry")
                         message_queue.task_done()
                         continue
                 
                 # Send or resend the message
+                logger.info(f"Sending message to {to_number}: {body[:30]}...")
                 message = twilio_client.messages.create(
                     body=body,
                     from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
                     to=to_number
                 )
                 
-                logger.info(f"Message sent successfully: {message.sid}")
+                logger.info(f"Message sent successfully: {message.sid} (status: {message.status})")
                 message_queue.task_done()
                 
             except TwilioRestException as e:
                 logger.error(f"Twilio error: {str(e)}")
+                logger.error(f"Twilio error code: {e.code}, status: {e.status}")
                 
                 # Check if we should retry
                 if retry_count < MAX_RETRIES:
@@ -146,32 +154,55 @@ def message_sender_worker():
                 
             except Exception as e:
                 logger.error(f"Unexpected error in message sender: {str(e)}")
+                logger.error(f"Error type: {type(e).__name__}")
+                
+                # Check if we should retry
+                if retry_count < MAX_RETRIES:
+                    # Increment retry count and put back in queue
+                    message_data['retry_count'] = retry_count + 1
+                    logger.info(f"Scheduling retry {retry_count + 1}/{MAX_RETRIES} in {RETRY_DELAY} seconds")
+                    
+                    # Wait before retrying
+                    time_module.sleep(RETRY_DELAY)
+                    message_queue.put(message_data)
+                else:
+                    logger.error(f"Failed to send message after {MAX_RETRIES} attempts")
+                
                 message_queue.task_done()
                 
         except Exception as e:
             logger.error(f"Error in message sender worker: {str(e)}")
+            # Continue the loop to process the next message
 
 def start_message_sender():
     """Start the background message sender thread"""
-    sender_thread = threading.Thread(target=message_sender_worker, daemon=True)
-    sender_thread.start()
-    logger.info("Message sender background thread started")
-    return sender_thread
+    logger.info("Starting message sender worker thread...")
+    message_sender_thread = threading.Thread(target=message_sender_worker, daemon=True)
+    message_sender_thread.start()
+    logger.info(f"Message sender worker thread started: {message_sender_thread.name}, is_alive={message_sender_thread.is_alive()}")
+    return message_sender_thread
 
 def send_whatsapp_message(to_number, body):
-    """Queue a message to be sent with retry capability"""
-    # Make sure the number has the whatsapp: prefix
-    if not to_number.startswith('whatsapp:'):
-        to_number = f"whatsapp:{to_number}"
-    
-    # Add message to the retry queue
-    message_data = {
-        'to': to_number,
-        'body': body,
-        'retry_count': 0
-    }
-    message_queue.put(message_data)
-    logger.info(f"Message queued for sending to {to_number}")
+    """Send a WhatsApp message using Twilio"""
+    try:
+        # Format the to number if it doesn't already have the WhatsApp prefix
+        if not to_number.startswith("whatsapp:"):
+            to_number = f"whatsapp:{to_number}"
+        
+        logger.info(f"Queueing message for sending to {to_number}")
+        
+        # Add message to the queue
+        message_queue.put({
+            'to': to_number,
+            'body': body,
+            'retry_count': 0
+        })
+        
+        logger.info(f"Message queued for sending to {to_number}")
+        return True
+    except Exception as e:
+        logger.error(f"Error queueing message: {str(e)}")
+        return False
 
 # ===== EXISTING FUNCTIONS =====
 
@@ -389,7 +420,6 @@ def parse_reminder(message, action):
                                 # Update the components
                                 dt_components["year"] = dt.year
                                 dt_components["month"] = dt.month
-                                dt_components["day"] = dt.day
                             # If it's an earlier date this year, but not more than 30 days in the past,
                             # assume it's next month
                             elif dt.year == current_year and (now_local.date() - dt.date()).days < 30:
@@ -1400,3 +1430,15 @@ def detect_reminder_intent_with_llm(message):
         logger.info("Falling back to keyword-based detection")
         # Fall back to keyword-based detection if LLM fails
         return detect_reminder_intent(message)
+
+# Add this to your startup code
+try:
+    logger.info("Checking Twilio credentials...")
+    account = twilio_client.api.accounts(os.getenv('TWILIO_ACCOUNT_SID')).fetch()
+    logger.info(f"Twilio account status: {account.status}")
+    
+    # Try to list messages to verify API access
+    messages = twilio_client.messages.list(limit=1)
+    logger.info(f"Successfully retrieved {len(messages)} messages from Twilio")
+except Exception as e:
+    logger.error(f"Error checking Twilio credentials: {str(e)}")

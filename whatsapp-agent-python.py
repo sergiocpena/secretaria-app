@@ -916,6 +916,16 @@ def process_image(image_url):
     try:
         logger.info(f"Processing image: {image_url}")
         
+        # Download the image WITH AUTHENTICATION
+        auth = (os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
+        image_response = requests.get(image_url, auth=auth)
+        
+        if image_response.status_code != 200:
+            raise Exception(f"Failed to download image: {image_response.status_code}")
+        
+        # Convert to base64 for OpenAI API
+        image_base64 = base64.b64encode(image_response.content).decode('utf-8')
+        
         response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
@@ -927,7 +937,12 @@ def process_image(image_url):
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "What's in this image?"},
-                        {"type": "image_url", "image_url": {"url": image_url}}
+                        {
+                            "type": "image_url", 
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}"
+                            }
+                        }
                     ]
                 }
             ],
@@ -944,8 +959,9 @@ def transcribe_audio(audio_url):
     try:
         logger.info(f"Transcribing audio: {audio_url}")
         
-        # Download the audio file
-        audio_response = requests.get(audio_url)
+        # Download the audio file WITH AUTHENTICATION
+        auth = (os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
+        audio_response = requests.get(audio_url, auth=auth)
         
         if audio_response.status_code != 200:
             raise Exception(f"Failed to download audio: {audio_response.status_code}")

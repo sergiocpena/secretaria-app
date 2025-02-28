@@ -16,6 +16,13 @@ import re
 import queue
 import logging
 import pytz
+from utils.database import (
+    list_reminders, create_reminder, cancel_reminder, 
+    get_pending_reminders, get_late_reminders,
+    format_reminder_list_by_time, format_created_reminders,
+    to_local_timezone, to_utc_timezone, store_conversation,
+    BRAZIL_TIMEZONE
+)
 
 # Configure logging
 logging.basicConfig(
@@ -266,34 +273,40 @@ def parse_reminder(message, action):
         # Get current time in Brazil timezone
         brazil_tz = pytz.timezone('America/Sao_Paulo')
         now_local = datetime.now(brazil_tz)
+        current_year = now_local.year
+        current_month = now_local.month
+        current_day = now_local.day
         
         system_prompt = ""
         
         if action == "criar":
-            system_prompt = """
+            system_prompt = f"""
             Você é um assistente especializado em extrair informações de lembretes em português.
+            
+            A data atual é: {now_local.strftime('%d/%m/%Y')} (dia/mês/ano)
+            A hora atual é: {now_local.strftime('%H:%M')} (formato 24h)
             
             Analise a mensagem do usuário e extraia os detalhes do lembrete, incluindo título e data/hora.
             
             Retorne um JSON com o seguinte formato:
-            {
+            {{
               "reminders": [
-                {
+                {{
                   "title": "título do lembrete",
-                  "datetime": {
+                  "datetime": {{
                     "year": ano (número),
                     "month": mês (número),
                     "day": dia (número),
                     "hour": hora (número em formato 24h),
                     "minute": minuto (número)
-                  }
-                }
+                  }}
+                }}
               ]
-            }
+            }}
             
             Regras:
-            1. Se o usuário não especificar o ano, use o ano atual.
-            2. Se o usuário não especificar o mês, use o mês atual.
+            1. Se o usuário não especificar o ano, use o ano atual ({current_year}).
+            2. Se o usuário não especificar o mês, use o mês atual ({current_month}).
             3. Se o usuário não especificar a hora, use 12:00 (meio-dia).
             4. Se o usuário mencionar "amanhã", incremente o dia atual.
             5. Se o usuário mencionar "próxima semana", adicione 7 dias à data atual.
@@ -444,14 +457,14 @@ def parse_datetime_with_llm(date_str):
         return tomorrow_noon.astimezone(timezone.utc)
 
 def list_reminders(user_phone):
-    """Lista os lembretes ativos para um usuário"""
+    """Lists active reminders for a user"""
     try:
         logger.info(f"Listing active reminders for user {user_phone}")
         result = supabase.table('reminders') \
             .select('*') \
             .eq('user_phone', user_phone) \
             .eq('is_active', True) \
-            .order('scheduled_time', {'ascending': True}) \
+            .order('scheduled_time') \
             .execute()
         
         logger.info(f"Found {len(result.data)} active reminders")
@@ -515,7 +528,7 @@ def handle_reminder_intent(user_phone, message_text):
             logger.info("Detected list reminders request")
             reminders = list_reminders(user_phone)
             logger.info(f"Found {len(reminders)} reminders to list")
-            return format_reminder_list(reminders)
+            return format_reminder_list_by_time(reminders)
             
         # Verificar se é uma solicitação para cancelar lembretes
         cancel_keywords = ["cancelar", "remover", "apagar", "deletar", "excluir"]
@@ -827,14 +840,7 @@ def handle_reminder_intent(user_phone, message_text):
                 
                 # Formatar resposta para múltiplos lembretes
                 if created_reminders:
-                    if len(created_reminders) == 1:
-                        reminder = created_reminders[0]
-                        return f"✅ Lembrete criado: {reminder['title']} para {format_datetime(reminder['time'])}"
-                    else:
-                        response = f"✅ {len(created_reminders)} lembretes criados:\n\n"
-                        for i, reminder in enumerate(created_reminders, 1):
-                            response += f"{i}. *{reminder['title']}* - {format_datetime(reminder['time'])}\n"
-                        return response
+                    return format_created_reminders(created_reminders)
                 else:
                     logger.warning("Failed to create any reminders")
                     return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
@@ -1267,16 +1273,16 @@ def send_direct_message():
         return {"error": str(e)}, 500
 
 def check_and_send_reminders():
-    """Verifica e envia lembretes pendentes"""
+    """Checks for pending reminders and sends notifications"""
     try:
         logger.info("Checking for pending reminders...")
         
-        # Obter a data e hora atual em UTC
+        # Get current time in UTC
         now = datetime.now(timezone.utc)
         # Truncate seconds for comparison
         now_truncated = now.replace(second=0, microsecond=0)
         
-        # Buscar lembretes ativos que estão programados para antes ou no horário atual
+        # Get all active reminders
         result = supabase.table('reminders') \
             .select('*') \
             .eq('is_active', True) \
@@ -1291,7 +1297,8 @@ def check_and_send_reminders():
             scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
             # Truncate seconds for comparison
             scheduled_time_truncated = scheduled_time.replace(second=0, microsecond=0)
-            if scheduled_time_truncated <= now_truncated:
+            # Only include reminders that are due (current time >= scheduled time)
+            if now_truncated >= scheduled_time_truncated:
                 pending_reminders.append(reminder)
         
         logger.info(f"Found {len(pending_reminders)} pending reminders after time comparison")
@@ -1299,9 +1306,8 @@ def check_and_send_reminders():
         sent_count = 0
         failed_count = 0
         
-        # Processar cada lembrete
         for reminder in pending_reminders:
-            # Enviar a notificação
+            # Send notification
             success = send_reminder_notification(reminder)
             
             if success:
@@ -1317,7 +1323,7 @@ def check_and_send_reminders():
                 logger.warning(f"Failed to send reminder {reminder['id']}, will try again later")
                 failed_count += 1
         
-        # Also update check_late_reminders function with similar logic
+        # Also check late reminders
         late_results = check_late_reminders()
         
         return {
@@ -1330,10 +1336,9 @@ def check_and_send_reminders():
             "late_failed": late_results.get("failed", 0),
             "late_deactivated": late_results.get("deactivated", 0)
         }
-    
     except Exception as e:
         logger.error(f"Error checking reminders: {str(e)}")
-        return {"success": False, "error": str(e)}
+        return {"error": str(e)}
 
 def check_late_reminders():
     """Verifica lembretes atrasados que não foram enviados após várias tentativas"""

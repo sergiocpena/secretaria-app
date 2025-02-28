@@ -472,15 +472,27 @@ def create_reminder(user_phone, title, scheduled_time):
             else:
                 return None
         
-        # Inserir o lembrete no banco de dados
-        result = supabase.table('reminders').insert({
+        # Inserir o lembrete no banco de dados - without retry_count field
+        reminder_data = {
             'user_phone': user_phone,
             'title': title,
             'scheduled_time': scheduled_time.isoformat(),
             'is_active': True,
-            'retry_count': 0,
             'created_at': datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }
+        
+        # Try to add retry_count if the column exists
+        try:
+            # First check if the column exists by querying a single row
+            test_query = supabase.table('reminders').select('retry_count').limit(1).execute()
+            # If we get here, the column exists
+            reminder_data['retry_count'] = 0
+        except Exception as column_error:
+            logger.warning(f"retry_count column doesn't exist in reminders table: {str(column_error)}")
+            # Continue without the retry_count field
+        
+        # Now insert with the appropriate fields
+        result = supabase.table('reminders').insert(reminder_data).execute()
         
         if result and result.data and len(result.data) > 0:
             reminder_id = result.data[0]['id']
@@ -1250,34 +1262,56 @@ def check_late_reminders():
                 
                 if success:
                     # Mark as inactive
+                    update_data = {'is_active': False}
+                    if 'is_late' in reminder:  # Check if column exists
+                        update_data['is_late'] = True
+                    
                     update_result = supabase.table('reminders') \
-                        .update({'is_active': False, 'is_late': True}) \
+                        .update(update_data) \
                         .eq('id', reminder['id']) \
                         .execute()
                     
                     logger.info(f"Late reminder {reminder['id']} marked as inactive after sending")
                     sent += 1
                 else:
-                    # Incrementar a contagem de tentativas
-                    retry_count = reminder.get('retry_count', 0) + 1
-                    failed += 1
-                    
-                    # Se exceder o número máximo de tentativas, desativar o lembrete
-                    if retry_count > 5:  # Máximo de 5 tentativas
-                        update_result = supabase.table('reminders') \
-                            .update({'is_active': False, 'is_late': True, 'retry_count': retry_count}) \
-                            .eq('id', reminder['id']) \
-                            .execute()
-                        
-                        logger.warning(f"Deactivated reminder {reminder['id']} after {retry_count} failed attempts")
-                        deactivated += 1
-                    else:
-                        update_result = supabase.table('reminders') \
-                            .update({'is_late': True, 'retry_count': retry_count}) \
-                            .eq('id', reminder['id']) \
-                            .execute()
-                        
-                        logger.warning(f"Failed to send late reminder {reminder['id']}, attempt {retry_count}")
+                    # Handle retry count if the column exists
+                    retry_count = 0
+                    try:
+                        if 'retry_count' in reminder:
+                            retry_count = reminder.get('retry_count', 0) + 1
+                            failed += 1
+                            
+                            # Se exceder o número máximo de tentativas, desativar o lembrete
+                            if retry_count > 5:  # Máximo de 5 tentativas
+                                update_data = {'is_active': False}
+                                if 'is_late' in reminder:
+                                    update_data['is_late'] = True
+                                if 'retry_count' in reminder:
+                                    update_data['retry_count'] = retry_count
+                                    
+                                update_result = supabase.table('reminders') \
+                                    .update(update_data) \
+                                    .eq('id', reminder['id']) \
+                                    .execute()
+                                
+                                logger.warning(f"Deactivated reminder {reminder['id']} after {retry_count} failed attempts")
+                                deactivated += 1
+                            else:
+                                update_data = {}
+                                if 'is_late' in reminder:
+                                    update_data['is_late'] = True
+                                if 'retry_count' in reminder:
+                                    update_data['retry_count'] = retry_count
+                                    
+                                if update_data:
+                                    update_result = supabase.table('reminders') \
+                                        .update(update_data) \
+                                        .eq('id', reminder['id']) \
+                                        .execute()
+                                
+                                logger.warning(f"Failed to send late reminder {reminder['id']}, attempt {retry_count}")
+                    except Exception as retry_error:
+                        logger.warning(f"Error updating retry count: {str(retry_error)}")
         
         return {
             "processed": processed,

@@ -585,23 +585,36 @@ def handle_reminder_intent(user_phone, message_text):
                 return "Você não tem lembretes ativos para cancelar."
                 
             # Parse the cancellation request
+            logger.info(f"Parsing cancellation request: '{normalized_text}'")
             cancel_data = parse_reminder(normalized_text, "cancelar")
             logger.info(f"Cancel data after parsing: {cancel_data}")
             
-            # Check for "all" cancellation first
-            if cancel_data and cancel_data.get("cancel_type") == "all":
-                logger.info(f"Cancelling all reminders for user {user_phone}")
-                cancelled_reminders = []
+            # Initialize cancelled_reminders list
+            cancelled_reminders = []
+            
+            # Check if we have valid cancel data
+            if not cancel_data:
+                logger.warning("Failed to parse cancellation request, showing reminder list")
+                return format_reminder_list(reminders)
+            
+            # Log the cancel_type for debugging
+            cancel_type = cancel_data.get("cancel_type")
+            logger.info(f"Cancellation type: {cancel_type}")
+            
+            # Check for "all" cancellation
+            if cancel_type == "all":
+                logger.info(f"Cancelling ALL reminders for user {user_phone}")
                 
                 for reminder in reminders:
                     try:
+                        logger.info(f"Attempting to cancel reminder {reminder['id']} (title: {reminder['title']})")
                         update_result = supabase.table('reminders') \
                             .update({'is_active': False}) \
                             .eq('id', reminder['id']) \
                             .execute()
                         
                         cancelled_reminders.append(reminder)
-                        logger.info(f"Successfully canceled reminder {reminder['id']} (all cancellation) for user {user_phone}")
+                        logger.info(f"Successfully canceled reminder {reminder['id']} (all cancellation)")
                     except Exception as e:
                         logger.error(f"Error cancelling reminder {reminder['id']}: {str(e)}")
                 
@@ -609,19 +622,21 @@ def handle_reminder_intent(user_phone, message_text):
                 if cancelled_reminders:
                     response = f"🗑️ {len(cancelled_reminders)} lembretes cancelados com sucesso.\n\n"
                     response += "Você não tem mais lembretes ativos."
+                    logger.info(f"All reminders cancelled successfully: {len(cancelled_reminders)}")
                     return response
+                else:
+                    logger.warning("Failed to cancel any reminders in 'all' mode")
             
             # Check for range cancellation
-            if cancel_data and cancel_data.get("cancel_type") == "range":
+            elif cancel_type == "range":
                 start = cancel_data.get("range_start", 1)
                 end = min(cancel_data.get("range_end", 1), len(reminders))
-                logger.info(f"Cancelling range from {start} to {end}")
+                logger.info(f"Cancelling RANGE from {start} to {end} for user {user_phone}")
                 
-                cancelled_reminders = []
                 for i in range(start-1, end):  # Adjust for 0-based indexing
                     if i < len(reminders):
                         reminder = reminders[i]
-                        logger.info(f"Cancelling reminder #{i+1}: {reminder['title']}")
+                        logger.info(f"Attempting to cancel reminder #{i+1}: {reminder['title']}")
                         
                         try:
                             update_result = supabase.table('reminders') \
@@ -630,44 +645,19 @@ def handle_reminder_intent(user_phone, message_text):
                                 .execute()
                             
                             cancelled_reminders.append(reminder)
-                            logger.info(f"Successfully canceled reminder {reminder['id']} (range cancellation) for user {user_phone}")
+                            logger.info(f"Successfully canceled reminder {reminder['id']} (range cancellation)")
                         except Exception as e:
                             logger.error(f"Error cancelling reminder {reminder['id']}: {str(e)}")
-                
-                # Format response for cancelled reminders
-                if cancelled_reminders:
-                    # Get the updated list of active reminders
-                    remaining_reminders = list_reminders(user_phone)
-                    
-                    response = f"🗑️ {len(cancelled_reminders)} lembretes cancelados com sucesso:\n\n"
-                    for i, reminder in enumerate(cancelled_reminders, 1):
-                        scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                        formatted_time = format_datetime(scheduled_time)
-                        response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
-                    response += "\n"
-                    
-                    # Add the list of remaining reminders
-                    if remaining_reminders:
-                        response += "📋 *Seus lembretes restantes:*\n"
-                        for i, reminder in enumerate(remaining_reminders, 1):
-                            scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                            formatted_time = format_datetime(scheduled_time)
-                            response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
-                    else:
-                        response += "Você não tem mais lembretes ativos."
-                    
-                    return response
             
             # Check for number cancellation
-            if cancel_data and cancel_data.get("cancel_type") == "number":
+            elif cancel_type == "number":
                 numbers = cancel_data.get("numbers", [])
-                logger.info(f"Cancelling by numbers: {numbers}")
+                logger.info(f"Cancelling by NUMBERS: {numbers} for user {user_phone}")
                 
-                cancelled_reminders = []
                 for num in numbers:
                     if 1 <= num <= len(reminders):
                         reminder = reminders[num-1]  # Adjust for 0-based indexing
-                        logger.info(f"Cancelling reminder #{num}: {reminder['title']}")
+                        logger.info(f"Attempting to cancel reminder #{num}: {reminder['title']}")
                         
                         try:
                             update_result = supabase.table('reminders') \
@@ -676,44 +666,14 @@ def handle_reminder_intent(user_phone, message_text):
                                 .execute()
                             
                             cancelled_reminders.append(reminder)
-                            logger.info(f"Successfully canceled reminder {reminder['id']} (number {num}) for user {user_phone}")
+                            logger.info(f"Successfully canceled reminder {reminder['id']} (number {num})")
                         except Exception as e:
                             logger.error(f"Error cancelling reminder {reminder['id']}: {str(e)}")
-                
-                # Format response for cancelled reminders
-                if cancelled_reminders:
-                    # Get the updated list of active reminders
-                    remaining_reminders = list_reminders(user_phone)
-                    
-                    if len(cancelled_reminders) == 1:
-                        reminder = cancelled_reminders[0]
-                        scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                        formatted_time = format_datetime(scheduled_time)
-                        response = f"🗑️ Lembrete cancelado com sucesso:\n*{reminder['title']}* - {formatted_time}\n\n"
-                    else:
-                        response = f"🗑️ {len(cancelled_reminders)} lembretes cancelados com sucesso:\n\n"
-                        for i, reminder in enumerate(cancelled_reminders, 1):
-                            scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                            formatted_time = format_datetime(scheduled_time)
-                            response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
-                        response += "\n"
-                    
-                    # Add the list of remaining reminders
-                    if remaining_reminders:
-                        response += "📋 *Seus lembretes restantes:*\n"
-                        for i, rem in enumerate(remaining_reminders, 1):
-                            sched_time = datetime.fromisoformat(rem['scheduled_time'].replace('Z', '+00:00'))
-                            fmt_time = format_datetime(sched_time)
-                            response += f"{i}. *{rem['title']}* - {fmt_time}\n"
-                    else:
-                        response += "Você não tem mais lembretes ativos."
-                    
-                    return response
             
             # Check for title cancellation
-            if cancel_data and cancel_data.get("cancel_type") == "title":
+            elif cancel_type == "title":
                 title_keywords = cancel_data.get("title", "").lower()
-                logger.info(f"Cancelling by title keywords: '{title_keywords}'")
+                logger.info(f"Cancelling by TITLE keywords: '{title_keywords}' for user {user_phone}")
                 
                 matching_reminders = []
                 for reminder in reminders:
@@ -747,36 +707,49 @@ def handle_reminder_intent(user_phone, message_text):
                         .eq('id', reminder['id']) \
                         .execute()
                     
-                    # Get the updated list of active reminders
-                    remaining_reminders = list_reminders(user_phone)
-                    
-                    scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                    formatted_time = format_datetime(scheduled_time)
-                    response = f"🗑️ Lembrete cancelado com sucesso:\n*{reminder['title']}* - {formatted_time}\n\n"
-                    
-                    # Add the list of remaining reminders
-                    if remaining_reminders:
-                        response += "📋 *Seus lembretes restantes:*\n"
-                        for i, rem in enumerate(remaining_reminders, 1):
-                            sched_time = datetime.fromisoformat(rem['scheduled_time'].replace('Z', '+00:00'))
-                            fmt_time = format_datetime(sched_time)
-                            response += f"{i}. *{rem['title']}* - {fmt_time}\n"
-                    else:
-                        response += "Você não tem mais lembretes ativos."
-                    
-                    return response
-                    
+                    cancelled_reminders.append(reminder)
+                    logger.info(f"Successfully canceled reminder {reminder['id']} by title")
                 except Exception as e:
                     logger.error(f"Error cancelling reminder {reminder['id']}: {str(e)}")
             
-            # If we get here, we couldn't parse the cancellation request properly
-            # or it didn't match any of our special cases
-            if not cancel_data:
-                logger.warning("Failed to parse cancellation request")
-                # If parsing failed, show the list of reminders
-                return format_reminder_list(reminders)
+            else:
+                logger.warning(f"Unknown cancel_type: {cancel_type}")
             
-            return "❌ Não consegui cancelar nenhum lembrete. Por favor, verifique o número ou a descrição."
+            # Format response for cancelled reminders
+            logger.info(f"Cancelled {len(cancelled_reminders)} reminders in total")
+            
+            if cancelled_reminders:
+                # Get the updated list of active reminders
+                remaining_reminders = list_reminders(user_phone)
+                logger.info(f"User has {len(remaining_reminders)} remaining active reminders")
+                
+                if len(cancelled_reminders) == 1:
+                    reminder = cancelled_reminders[0]
+                    scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+                    formatted_time = format_datetime(scheduled_time)
+                    response = f"🗑️ Lembrete cancelado com sucesso:\n*{reminder['title']}* - {formatted_time}\n\n"
+                else:
+                    response = f"🗑️ {len(cancelled_reminders)} lembretes cancelados com sucesso:\n\n"
+                    for i, reminder in enumerate(cancelled_reminders, 1):
+                        scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+                        formatted_time = format_datetime(scheduled_time)
+                        response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
+                    response += "\n"
+                
+                # Add the list of remaining reminders
+                if remaining_reminders:
+                    response += "📋 *Seus lembretes restantes:*\n"
+                    for i, reminder in enumerate(remaining_reminders, 1):
+                        scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+                        formatted_time = format_datetime(scheduled_time)
+                        response += f"{i}. *{reminder['title']}* - {formatted_time}\n"
+                else:
+                    response += "Você não tem mais lembretes ativos."
+                
+                return response
+            else:
+                logger.warning("No reminders were cancelled")
+                return "❌ Não consegui cancelar nenhum lembrete. Por favor, verifique o número ou a descrição."
         
         # Verificar se é uma solicitação para criar lembretes
         create_keywords = ["lembrar", "lembre", "lembra", "criar lembrete", "novo lembrete"]

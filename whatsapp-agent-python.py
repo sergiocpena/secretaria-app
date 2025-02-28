@@ -335,6 +335,9 @@ def parse_datetime(date_str, time_str):
         brazil_tz = pytz.timezone('America/Sao_Paulo')  # UTC-3
         now_local = datetime.now(brazil_tz)
         
+        # Log the input for debugging
+        logger.info(f"parse_datetime input: date_str='{date_str}', time_str='{time_str}'")
+        
         # Verificar se temos valores nulos
         if date_str is None:
             # Se não tiver data, assumir hoje
@@ -344,51 +347,28 @@ def parse_datetime(date_str, time_str):
         elif date_str.lower() == 'amanhã' or date_str.lower() == 'amanha':
             date = (now_local + timedelta(days=1)).date()
         else:
-            # Tentar interpretar expressões relativas como "daqui X minutos/horas/dias"
-            relative_match = re.search(r'daqui\s+(\d+)\s*(minutos?|horas?|dias?|min|h)', date_str.lower())
-            if relative_match:
-                amount = int(relative_match.group(1))
-                unit = relative_match.group(2)
-                
-                if 'minuto' in unit or unit == 'min':
-                    return now_local + timedelta(minutes=amount)
-                elif 'hora' in unit or unit == 'h':
-                    return now_local + timedelta(hours=amount)
-                elif 'dia' in unit:
-                    return now_local + timedelta(days=amount)
-            
-            # Try to match "em X horas/minutos"
-            em_match = re.search(r'em\s+(\d+)\s*(minutos?|horas?|dias?|min|h)', date_str.lower())
-            if em_match:
-                amount = int(em_match.group(1))
-                unit = em_match.group(2)
-                
-                if 'minuto' in unit or unit == 'min':
-                    return now_local + timedelta(minutes=amount)
-                elif 'hora' in unit or unit == 'h':
-                    return now_local + timedelta(hours=amount)
-                elif 'dia' in unit:
-                    return now_local + timedelta(days=amount)
-            
-            # Se não for expressão relativa, tentar como data específica
-            try:
-                # Tentar formato YYYY-MM-DD
-                date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            except ValueError:
-                # Tentar formato DD/MM/YYYY
-                try:
-                    date = datetime.strptime(date_str, "%d/%m/%Y").date()
-                except ValueError:
-                    # Se falhar, usar amanhã como padrão
-                    date = (now_local + timedelta(days=1)).date()
-        
-        # Se já retornamos um datetime completo (caso de tempo relativo)
-        if isinstance(date, datetime):
-            # Ensure it's in the local timezone
-            if date.tzinfo is None:
-                date = brazil_tz.localize(date)
-            # Convert to UTC for storage
-            return date.astimezone(timezone.utc)
+            # Special case for "daqui X horas/minutos"
+            if isinstance(date_str, str) and "daqui" in date_str.lower():
+                logger.info(f"Processing relative time expression: {date_str}")
+                # Tentar interpretar expressões relativas como "daqui X minutos/horas/dias"
+                relative_match = re.search(r'daqui\s+(\d+)\s*(minutos?|horas?|dias?|min|h)', date_str.lower())
+                if relative_match:
+                    amount = int(relative_match.group(1))
+                    unit = relative_match.group(2)
+                    logger.info(f"Matched relative time: amount={amount}, unit={unit}")
+                    
+                    if 'minuto' in unit or unit == 'min':
+                        result = now_local + timedelta(minutes=amount)
+                    elif 'hora' in unit or unit == 'h':
+                        result = now_local + timedelta(hours=amount)
+                    elif 'dia' in unit:
+                        result = now_local + timedelta(days=amount)
+                    else:
+                        result = now_local + timedelta(hours=1)  # Default
+                    
+                    # Convert to UTC and return
+                    logger.info(f"Calculated relative time: {result} (local)")
+                    return result.astimezone(timezone.utc)
         
         # Processar a hora se fornecida
         if time_str:
@@ -969,42 +949,25 @@ def webhook():
             if is_reminder:
                 logger.info(f"Reminder intent detected: {action}")
                 
-                if action == "listar":
-                    # Listar lembretes
-                    reminders = list_reminders(user_phone)
-                    full_response = format_reminder_list(reminders)
+                # Handle the reminder intent
+                reminder_response = handle_reminder_intent(user_phone, incoming_msg)
                 
-                elif action == "cancelar":
-                    # Cancelar lembrete
-                    reminder_data = parse_reminder(incoming_msg, action)
-                    if reminder_data and 'keywords' in reminder_data:
-                        cancelled = handle_reminder_intent(user_phone, reminder_data['keywords'])
-                        if cancelled:
-                            full_response = f"✅ Lembrete cancelado: {cancelled['title']}"
-                        else:
-                            full_response = "❌ Não encontrei nenhum lembrete com essa descrição."
-                    else:
-                        full_response = "❌ Não consegui identificar qual lembrete você deseja cancelar."
+                # Log the full response for debugging
+                logger.info(f"Full reminder response: {reminder_response}")
                 
-                elif action == "criar":
-                    # Criar lembrete
-                    reminder_data = parse_reminder(incoming_msg, action)
-                    if reminder_data and 'title' in reminder_data and 'date' in reminder_data:
-                        # Converter data/hora para timestamp
-                        scheduled_time = parse_datetime(
-                            reminder_data.get('date', 'amanhã'), 
-                            reminder_data.get('time', '12:00')
-                        )
-                        
-                        # Criar o lembrete
-                        reminder_id = create_reminder(user_phone, reminder_data['title'], scheduled_time)
-                        
-                        if reminder_id:
-                            full_response = f"✅ Lembrete criado: {reminder_data['title']} para {format_datetime(scheduled_time)}"
-                        else:
-                            full_response = "❌ Não consegui criar o lembrete. Por favor, tente novamente."
-                    else:
-                        full_response = "❌ Não consegui entender os detalhes do lembrete. Por favor, especifique o título e quando deseja ser lembrado."
+                if reminder_response:
+                    # Store the agent's response
+                    store_conversation(
+                        user_phone=user_phone,
+                        message_content=reminder_response,
+                        message_type='text',
+                        is_from_user=False
+                    )
+                    
+                    # Return the response
+                    resp = MessagingResponse()
+                    resp.message(reminder_response)
+                    return str(resp)
             else:
                 # Get AI response for regular message
                 full_response = get_ai_response(incoming_msg)

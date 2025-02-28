@@ -371,13 +371,17 @@ def parse_reminder(message, action):
                     
                     # Create a datetime object to check if it's in the past
                     try:
-                        dt = datetime(
+                        # Create a naive datetime first
+                        naive_dt = datetime(
                             year=dt_components.get("year", current_year),
                             month=dt_components.get("month", current_month),
                             day=dt_components.get("day", current_day),
                             hour=dt_components.get("hour", 12),
                             minute=dt_components.get("minute", 0)
                         )
+                        
+                        # Add timezone info to make it aware
+                        dt = brazil_tz.localize(naive_dt)
                         
                         # If the datetime is in the past, adjust it
                         if dt < now_local:

@@ -355,6 +355,243 @@ class ReminderAgent:
             logger.error(f"Error in handle_reminder_intent: {str(e)}")
             return "Ocorreu um erro ao processar sua solicitação de lembrete. Por favor, tente novamente."
 
+    def process_reminder(self, user_phone, title, time_str):
+        """Processa a criação de um novo lembrete"""
+        try:
+            # Converter data/hora para timestamp
+            scheduled_time = self.parse_datetime_with_llm(time_str)
+
+            # Criar o lembrete
+            reminder_id = create_reminder(user_phone, title, scheduled_time)
+
+            if reminder_id:
+                return f"✅ Lembrete criado: {title} para {format_datetime(scheduled_time)}"
+            else:
+                return "❌ Não consegui criar o lembrete. Por favor, tente novamente."
+
+        except Exception as e:
+            logger.error(f"Error processing reminder: {str(e)}")
+            return "❌ Não consegui processar o lembrete. Por favor, tente novamente."
+
+    def start_reminder_checker(self):
+        """Inicia o verificador de lembretes em uma thread separada como backup"""
+        def reminder_checker_thread():
+            logger.info("Backup reminder checker thread started")
+
+            # Configurar o intervalo de verificação (mais longo, já que temos o cron-job.org)
+            check_interval = 300  # 5 minutos
+
+            while True:
+                try:
+                    # Dormir primeiro
+                    import time as time_module
+                    time_module.sleep(check_interval)
+
+                    # Depois verificar os lembretes
+                    logger.info("Running backup reminder check")
+                    self.check_and_send_reminders()
+
+                except Exception as e:
+                    logger.error(f"Error in backup reminder checker: {str(e)}")
+
+        import threading
+        thread = threading.Thread(target=reminder_checker_thread, daemon=True)
+        thread.start()
+        logger.info("Backup reminder checker background thread started")
+        return thread
+
+    def check_and_send_reminders(self):
+        """Checks for pending reminders and sends notifications"""
+        try:
+            logger.info("Checking for pending reminders...")
+
+            # Get current time in UTC
+            now = datetime.now(timezone.utc)
+            # Truncate seconds for comparison
+            now_truncated = now.replace(second=0, microsecond=0)
+
+            # Get all active reminders
+            from utils.database import supabase
+            result = supabase.table('reminders') \
+                .select('*') \
+                .eq('is_active', True) \
+                .execute()
+
+            reminders = result.data
+            logger.info(f"Found {len(reminders)} active reminders")
+
+            # Filter reminders manually to ignore seconds
+            pending_reminders = []
+            for reminder in reminders:
+                scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+                # Truncate seconds for comparison
+                scheduled_time_truncated = scheduled_time.replace(second=0, microsecond=0)
+
+                # Only include reminders that are due (current time >= scheduled time)
+                # Add a debug log to see the comparison
+                logger.info(f"Comparing reminder time {scheduled_time_truncated} with current time {now_truncated}")
+                if now_truncated >= scheduled_time_truncated:
+                    logger.info(f"Reminder {reminder['id']} is due")
+                    pending_reminders.append(reminder)
+                else:
+                    logger.info(f"Reminder {reminder['id']} is not yet due")
+
+            logger.info(f"Found {len(pending_reminders)} pending reminders after time comparison")
+
+            sent_count = 0
+            failed_count = 0
+
+            for reminder in pending_reminders:
+                # Send notification
+                success = self.send_reminder_notification(reminder)
+
+                if success:
+                    # Mark as inactive
+                    from utils.database import supabase
+                    update_result = supabase.table('reminders') \
+                        .update({'is_active': False}) \
+                        .eq('id', reminder['id']) \
+                        .execute()
+
+                    logger.info(f"Reminder {reminder['id']} marked as inactive after sending")
+                    sent_count += 1
+                else:
+                    logger.warning(f"Failed to send reminder {reminder['id']}, will try again later")
+                    failed_count += 1
+
+            # Also check late reminders
+            late_results = self.check_late_reminders()
+
+            return {
+                "success": True, 
+                "processed": len(pending_reminders),
+                "sent": sent_count,
+                "failed": failed_count,
+                "late_processed": late_results.get("processed", 0),
+                "late_sent": late_results.get("sent", 0),
+                "late_failed": late_results.get("failed", 0),
+                "late_deactivated": late_results.get("deactivated", 0)
+            }
+        except Exception as e:
+            logger.error(f"Error checking reminders: {str(e)}")
+            return {"error": str(e)}
+
+    def check_late_reminders(self):
+        """Verifica lembretes atrasados que não foram enviados após várias tentativas"""
+        try:
+            # Obter a data e hora atual em UTC
+            now = datetime.now(timezone.utc)
+            # Truncate seconds
+            now_truncated = now.replace(second=0, microsecond=0)
+
+            # Definir um limite de tempo para considerar um lembrete como atrasado (ex: 30 minutos)
+            late_threshold = now_truncated - timedelta(minutes=30)
+
+            # Buscar lembretes ativos
+            from utils.database import supabase
+            result = supabase.table('reminders') \
+                .select('*') \
+                .eq('is_active', True) \
+                .execute()
+
+            reminders = result.data
+
+            # Filter late reminders manually
+            late_reminders = []
+            for reminder in reminders:
+                scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+                # Truncate seconds
+                scheduled_time_truncated = scheduled_time.replace(second=0, microsecond=0)
+                if scheduled_time_truncated <= late_threshold:
+                    late_reminders.append(reminder)
+
+            processed = 0
+            sent = 0
+            failed = 0
+            deactivated = 0
+
+            if late_reminders:
+                logger.info(f"Found {len(late_reminders)} late reminders")
+                processed = len(late_reminders)
+
+                for reminder in late_reminders:
+                    # Tentar enviar o lembrete atrasado
+                    success = self.send_reminder_notification(reminder)
+
+                    if success:
+                        # Mark as inactive
+                        update_result = supabase.table('reminders') \
+                            .update({'is_active': False}) \
+                            .eq('id', reminder['id']) \
+                            .execute()
+
+                        logger.info(f"Late reminder {reminder['id']} marked as inactive after sending")
+                        sent += 1
+                    else:
+                        # For very late reminders (over 2 hours), deactivate them
+                        very_late_threshold = now_truncated - timedelta(hours=2)
+                        scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
+
+                        if scheduled_time <= very_late_threshold:
+                            update_result = supabase.table('reminders') \
+                                .update({'is_active': False}) \
+                                .eq('id', reminder['id']) \
+                                .execute()
+
+                            logger.warning(f"Deactivated very late reminder {reminder['id']} (over 2 hours late)")
+                            deactivated += 1
+                        else:
+                            logger.warning(f"Failed to send late reminder {reminder['id']}, will try again later")
+                            failed += 1
+
+            return {
+                "processed": processed,
+                "sent": sent,
+                "failed": failed,
+                "deactivated": deactivated
+            }
+
+        except Exception as e:
+            logger.error(f"Error checking late reminders: {str(e)}")
+            return {
+                "processed": 0,
+                "sent": 0,
+                "failed": 0,
+                "deactivated": 0,
+                "error": str(e)
+            }
+
+    def send_reminder_notification(self, reminder):
+        """Envia uma notificação de lembrete para o usuário"""
+        try:
+            user_phone = reminder['user_phone']
+            title = reminder['title']
+
+            # Format the message
+            message_body = f"🔔 *LEMBRETE*: {title}"
+
+            logger.info(f"Sending reminder to {user_phone}: {message_body}")
+
+            # Use the send_message_func if provided
+            if self.send_message_func:
+                success = self.send_message_func(user_phone, message_body)
+
+                if success:
+                    # Store in conversation history
+                    from agents.general_agent.general_db import store_conversation
+                    store_conversation(user_phone, message_body, 'text', False, agent="REMINDER")
+                    return True
+                else:
+                    logger.error(f"Failed to send reminder to {user_phone}")
+                    return False
+            else:
+                logger.error("No send_message_func provided to ReminderAgent")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error sending reminder notification: {str(e)}")
+            return False
+
     def parse_reminder(self, message, action_type):
         """Parse a reminder message to extract title and time"""
         logger.info(f"Parsing reminder: '{message}' with action_type: {action_type}")

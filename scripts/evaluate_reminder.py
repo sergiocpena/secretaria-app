@@ -55,7 +55,7 @@ def time_machine(target_time):
         
         # Try to patch datetime in the reminder_agent module
         try:
-            import reminder_agent
+            from agents.reminder_agent import reminder_agent
             import datetime as dt
             
             # Create a MockDatetime class
@@ -83,7 +83,7 @@ def time_machine(target_time):
         
         # Restore any other patches we made
         try:
-            import reminder_agent
+            from agents.reminder_agent import reminder_agent
             if 'reminder_agent.datetime' in patches:
                 reminder_agent.datetime = patches['reminder_agent.datetime']
         except (ImportError, AttributeError):
@@ -571,10 +571,8 @@ def main():
         result = evaluate_reminder_case(reminder_agent, test_case, current_time)
         results.append(result)
         
-        # Add delay between API calls to avoid rate limiting/caching issues
-        if i < len(test_cases) - 1:  # Don't delay after the last test
-            print(f"\nWaiting {args.delay} seconds before the next test case to avoid API rate limiting...")
-            time.sleep(args.delay)
+        # No delay between test cases
+        pass
     
     # Calculate overall metrics and save results
     total_cases = len(results)
@@ -710,12 +708,14 @@ def generate_html_report(results):
             "status": status,
             "status_class": status_class,
             "status_icon": status_icon,
-            "reasoning": reasoning
+            "reasoning": reasoning,
+            "passed": result.get("passed", False)  # Add passed flag for counting
         })
     
-    # Calculate summary statistics
+    # Calculate summary statistics from the actual results
     total = len(formatted_results)
     passed = sum(1 for r in formatted_results if r.get("passed", False))
+    failed = total - passed
     pass_rate = passed / total * 100 if total > 0 else 0
     
     # Generate HTML
@@ -771,7 +771,7 @@ def generate_html_report(results):
                 <h2>Summary</h2>
                 <p>Total test cases: {total}</p>
                 <p>Passed: {passed} ({pass_rate:.1f}%)</p>
-                <p>Failed: {total - passed} ({100 - pass_rate:.1f}%)</p>
+                <p>Failed: {failed} ({100 - pass_rate:.1f}%)</p>
             </div>
             
             <h2>Results Overview</h2>

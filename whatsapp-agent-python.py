@@ -66,6 +66,15 @@ intent_classifier = IntentClassifier()
 # Initialize the ReminderAgent
 reminder_agent = ReminderAgent()
 
+# Use a lazy initialization pattern:
+_twilio_client = None
+
+def get_twilio_client():
+    global _twilio_client
+    if _twilio_client is None:
+        _twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
+    return _twilio_client
+
 # ===== EXISTING FUNCTIONS =====
 
 def ping_self():
@@ -108,13 +117,11 @@ def send_direct_message():
 # Add this to your startup code
 try:
     logger.info("Checking Twilio credentials...")
-    from twilio.rest import Client
-    twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
-    account = twilio_client.api.accounts(os.getenv('TWILIO_ACCOUNT_SID')).fetch()
+    account = get_twilio_client().api.accounts(os.getenv('TWILIO_ACCOUNT_SID')).fetch()
     logger.info(f"Twilio account status: {account.status}")
     
     # Try to list messages to verify API access
-    messages = twilio_client.messages.list(limit=1)
+    messages = get_twilio_client().messages.list(limit=1)
     logger.info(f"Successfully retrieved {len(messages)} messages from Twilio")
 except Exception as e:
     logger.error(f"Error checking Twilio credentials: {str(e)}")

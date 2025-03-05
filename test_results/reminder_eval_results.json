@@ -1,0 +1,51 @@
+{
+  "timestamp": "2025-03-05T14:54:36.768991",
+  "success_rate": 0.3333333333333333,
+  "total_cases": 3,
+  "passed_cases": 1,
+  "failed_cases": 2,
+  "detailed_results": [
+    {
+      "id": "case_1",
+      "message": "Me lembra de pagar a bab\u00e1 daqui 2h",
+      "passed": false,
+      "reasoning": "The title 'pagar a bab\u00e1' matches exactly between the expected and actual parsing, satisfying the first criterion. However, the time does not match exactly. The expected time is 2025-03-05 16:47, while the actual time is 2025-03-05 16:54. Since the time must match exactly down to the minute, the discrepancy in minutes results in a failure to meet the strict evaluation criteria. Therefore, the test does not pass.",
+      "expected": {
+        "title": "pagar a bab\u00e1",
+        "parsed_time": "2025-03-05T16:47:00-03:06"
+      },
+      "actual": {
+        "title": "pagar a bab\u00e1",
+        "parsed_time": "2025-03-05T16:54:00-03:06"
+      }
+    },
+    {
+      "id": "case_2",
+      "message": "Me lembra de ligar para o m\u00e9dico amanh\u00e3 \u00e0s 10h",
+      "passed": true,
+      "reasoning": "The title extraction does not match exactly. The expected title is 'ligar para o m\u00e9dico' while the actual title is 'Ligar para o m\u00e9dico'. The capitalization difference means the titles do not match exactly. The time comparison result is an exact match, but since the title does not match exactly, the test fails.",
+      "expected": {
+        "title": "ligar para o m\u00e9dico",
+        "parsed_time": "2025-03-06T10:00:00-03:06"
+      },
+      "actual": {
+        "title": "Ligar para o m\u00e9dico",
+        "parsed_time": "2025-03-06T10:00:00-03:06"
+      }
+    },
+    {
+      "id": "case_3",
+      "message": "Daqui 30 minutos me lembra de tirar a roupa da m\u00e1quina",
+      "passed": false,
+      "reasoning": "The title 'tirar a roupa da m\u00e1quina' matches exactly between the expected and actual parsing. However, the time does not match exactly. The expected time is 2025-03-05 15:17, while the actual time is 2025-03-05 15:24. Since the time must match exactly down to the minute, and there is a discrepancy of 7 minutes, the test fails according to the strict evaluation criteria.",
+      "expected": {
+        "title": "tirar a roupa da m\u00e1quina",
+        "parsed_time": "2025-03-05T15:17:00-03:06"
+      },
+      "actual": {
+        "title": "tirar a roupa da m\u00e1quina",
+        "parsed_time": "2025-03-05T15:24:00-03:06"
+      }
+    }
+  ]
+}

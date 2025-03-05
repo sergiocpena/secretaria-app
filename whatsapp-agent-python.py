@@ -63,8 +63,8 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 # Initialize the classifier
 intent_classifier = IntentClassifier()
 
-# Initialize the ReminderAgent
-reminder_agent = ReminderAgent()
+# Initialize the ReminderAgent with the OpenAI API key
+reminder_agent = ReminderAgent(api_key=os.getenv('OPENAI_API_KEY'))
 
 # Use a lazy initialization pattern:
 _twilio_client = None

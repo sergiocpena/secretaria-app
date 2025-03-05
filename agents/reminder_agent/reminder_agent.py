@@ -16,47 +16,24 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("ReminderAgent")
 
 class ReminderAgent:
-    def __init__(self):
+    def __init__(self, send_message_func=None, intent_classifier=None, api_key=None):
         """
         Initialize the reminder agent
+        
+        Args:
+            send_message_func: Function to send messages to users
+            intent_classifier: Intent classifier instance
+            api_key: OpenAI API key
         """
         self.timezone = pytz.timezone('America/Sao_Paulo')
+        self.send_message_func = send_message_func
+        self.intent_classifier = intent_classifier
         
         # Initialize client only if API key is available
         self.client = None
         
-        # Try different ways to get the API key with debugging
-        api_key = None
-        
-        # Method 1: Using os.getenv
-        api_key_getenv = os.getenv("OPENAI_API_KEY")
-        logger.info(f"API key from os.getenv: {'FOUND' if api_key_getenv else 'NOT FOUND'}")
-        
-        # Method 2: Using os.environ.get
-        api_key_environ = os.environ.get("OPENAI_API_KEY")
-        logger.info(f"API key from os.environ.get: {'FOUND' if api_key_environ else 'NOT FOUND'}")
-        
-        # Method 3: Direct dictionary access
-        try:
-            api_key_direct = os.environ["OPENAI_API_KEY"]
-            logger.info(f"API key from direct access: {'FOUND' if api_key_direct else 'NOT FOUND'}")
-        except KeyError:
-            api_key_direct = None
-            logger.info("API key not found via direct access")
-        
-        # Try to load from dotenv file explicitly
-        try:
-            from dotenv import load_dotenv
-            load_dotenv()
-            logger.info("Attempted to load .env file explicitly")
-            # Check again after loading dotenv
-            api_key_after_dotenv = os.getenv("OPENAI_API_KEY")
-            logger.info(f"API key after loading dotenv: {'FOUND' if api_key_after_dotenv else 'NOT FOUND'}")
-        except ImportError:
-            logger.warning("python-dotenv not installed, skipping explicit .env loading")
-        
-        # Use any method that worked
-        api_key = api_key_getenv or api_key_environ or api_key_direct or api_key_after_dotenv
+        # Use provided API key first, then try environment
+        api_key = api_key or os.getenv("OPENAI_API_KEY")
         
         if api_key:
             try:

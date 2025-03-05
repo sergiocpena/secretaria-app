@@ -9,6 +9,7 @@ from contextlib import contextmanager
 import builtins
 import time
 import copy
+import webbrowser
 
 # Import your reminder agent
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -510,142 +511,123 @@ def compare_with_llm(expected, actual, match_details, all_match):
         }
 
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate reminder parsing')
-    parser.add_argument('--input', default='test_data/reminder_test_cases.json', help='Path to test cases JSON file')
-    parser.add_argument('--output', default='evaluation_results.json', help='Path to output results JSON file')
-    parser.add_argument('--html', default='evaluation_results.html', help='Path to output HTML report file')
-    parser.add_argument('--delay', type=float, default=2.0, help='Delay in seconds between test cases')
+    """Run the evaluation"""
+    parser = argparse.ArgumentParser(description='Evaluate reminder agent on test cases')
+    parser.add_argument('--test-cases', default='test_data/reminder_test_cases.json',
+                      help='Path to test cases JSON file')
+    parser.add_argument('--output', default='test_results/reminder_eval_results.json',
+                      help='Path to output JSON file')
+    parser.add_argument('--html', default='test_results/reminder_eval_results.html',
+                      help='Path to output HTML report file')
+    parser.add_argument('--delay', type=int, default=2,
+                      help='Delay in seconds between test cases to avoid API rate limiting')
+    parser.add_argument('--no-open', action='store_true',
+                      help='Do not automatically open the HTML report')
     args = parser.parse_args()
     
+    # Check if test cases file exists
+    if not os.path.exists(args.test_cases):
+        print(f"Error: Test cases file not found: {args.test_cases}")
+        print(f"Please ensure the test cases file exists at the specified path.")
+        return 1
+    
     # Load test cases
-    with open(args.input, 'r') as f:
+    print(f"Loading test cases from {args.test_cases}")
+    with open(args.test_cases, 'r', encoding='utf-8') as f:
         test_cases = json.load(f)
     
-    # Create a ReminderAgent instance
-    reminder_agent = ReminderAgent()
+    # Ensure we have test cases
+    if not test_cases:
+        print("Error: No test cases found in the test cases file.")
+        return 1
+
+    # Initialize the reminder agent
+    reminder_agent = TimeAwareReminderAgent(ReminderAgent())
     
     # Evaluate each test case
     results = []
     for i, test_case in enumerate(test_cases):
-        print("\n=============================================================================")
-        print("================================================================================")
+        print("\n" + "=" * 80)
         print(f"Evaluating test case: {test_case['id']}")
-        print("=============================================================================")
-        print("================================================================================")
+        print("=" * 80)
         
-        # Print input data
-        print(f"Input data:")
-        print(f"  Message: {test_case['message']}")
-        print(f"  Current time: {test_case.get('current_time', 'Not specified')}")
-        if 'description' in test_case:
-            print(f"  Description: {test_case['description']}")
-        print(f"  Expected:")
-        
-        # Handle expected output differently based on whether it's a list or a single reminder
-        if isinstance(test_case['expected'], list):
-            for j, expected_item in enumerate(test_case['expected']):
-                print(f"    Reminder #{j+1}:")
-                print(f"      Title: {expected_item['title']}")
-                print(f"      Parsed time: {expected_item['parsed_time']}")
+        # Parse the current time
+        current_time_str = test_case.get('current_time')
+        if not current_time_str:
+            print("Warning: No current_time specified in test case, using now as default")
+            current_time = datetime.now(pytz.UTC)
         else:
-            print(f"    Title: {test_case['expected']['title']}")
-            print(f"    Parsed time: {test_case['expected']['parsed_time']}")
-        print()
-        
-        # Parse the current_time from the test case
-        if "current_time" in test_case:
             try:
-                current_time = datetime.fromisoformat(test_case["current_time"].replace('Z', '+00:00'))
-                print(f"Using test case current time: {current_time}")
-            except Exception as e:
-                # Fallback to current time if parsing fails
-                current_time = datetime.now(pytz.timezone('America/Sao_Paulo'))
-                print(f"Warning: Could not parse current_time from test case ({e}), using system time")
-        else:
-            # Use current time if not specified
-            current_time = datetime.now(pytz.timezone('America/Sao_Paulo'))
-            print(f"Warning: No current_time specified in test case, using system time")
+                current_time = datetime.fromisoformat(current_time_str)
+                if current_time.tzinfo is None:
+                    # Apply default timezone if none specified
+                    current_time = current_time.replace(tzinfo=pytz.UTC)
+            except ValueError:
+                print(f"Error: Invalid current_time format in test case: {current_time_str}")
+                print("Using current time as fallback")
+                current_time = datetime.now(pytz.UTC)
         
         # Evaluate the test case
         result = evaluate_reminder_case(reminder_agent, test_case, current_time)
         results.append(result)
         
-        # Print result
-        if result.get("passed", False):
-            print(f"{test_case['id']} - ✅ PASSED")
-        else:
-            print(f"{test_case['id']} - ❌ FAILED")
-        
-        print(f"Actual result:")
-        if "actual" in result:
-            # Check if the actual result contains a "reminders" field for multiple reminders
-            if isinstance(result["actual"], dict) and "reminders" in result["actual"]:
-                for j, actual_item in enumerate(result["actual"]["reminders"]):
-                    print(f"  Reminder #{j+1}:")
-                    print(f"    Title: {actual_item.get('title', 'Not available')}")
-                    print(f"    Parsed time: {actual_item.get('parsed_time', 'Not available')}")
-            else:
-                print(f"  Title: {result['actual'].get('title', 'Not available')}")
-                print(f"  Parsed time: {result['actual'].get('parsed_time', 'Not available')}")
-        else:
-            print("  No actual result available")
-        
-        print(f"\nReasoning:")
-        print(f"{result.get('reasoning', 'No reasoning provided')}")
-        
-        # Print any errors
-        if "error" in result:
-            print(f"\nError:")
-            print(f"{result['error']}")
-        
-        # Add a delay between test cases to avoid API caching issues
+        # Add delay between API calls to avoid rate limiting/caching issues
         if i < len(test_cases) - 1:  # Don't delay after the last test
-            print(f"\nWaiting {args.delay} seconds before the next test case to avoid API caching issues...")
+            print(f"\nWaiting {args.delay} seconds before the next test case to avoid API rate limiting...")
             time.sleep(args.delay)
-        
-        print(f"\n-----------------------------------------------------------------------------")
-        print("--------------------------------------------------------------------------------")
     
-    # Calculate overall metrics
-    success_rate = sum(1 for r in results if r["passed"]) / len(results)
+    # Calculate overall metrics and save results
+    total_cases = len(results)
+    passed_cases = sum(1 for r in results if r.get("passed", False))
+    failed_cases = total_cases - passed_cases
+    success_rate = passed_cases / total_cases if total_cases > 0 else 0
     
-    # Create final report
-    report = {
-        "timestamp": datetime.now().isoformat(),
+    print("\n=============================================================================")
+    print(f"Overall results: {passed_cases}/{total_cases} passed ({success_rate:.2%})")
+    print("=============================================================================")
+    
+    # Combine results into a single object
+    final_results = {
         "success_rate": success_rate,
-        "total_cases": len(results),
-        "passed_cases": sum(1 for r in results if r["passed"]),
-        "failed_cases": sum(1 for r in results if not r["passed"]),
+        "total_cases": total_cases,
+        "passed_cases": passed_cases,
+        "failed_cases": failed_cases,
         "detailed_results": results
     }
     
-    # Save JSON results
-    with open(args.output, 'w') as f:
-        json.dump(report, f, indent=2)
+    # Save results
+    save_results(final_results, args.output, args.html)
     
-    # Generate and save HTML report
-    html_report = generate_html_report(results)
-    with open(args.html, 'w') as f:
-        f.write(html_report)
+    print(f"\nResults saved to {args.output}")
+    print(f"HTML report generated at {args.html}")
     
-    print(f"\nEvaluation complete!")
-    print(f"Success rate: {success_rate:.2%}")
-    print(f"Passed: {report['passed_cases']}/{report['total_cases']}")
-    print(f"Results saved to: {args.output}")
-    print(f"HTML report saved to: {args.html}")
+    # Open the HTML report in the default browser
+    if not args.no_open:
+        try:
+            html_path = os.path.abspath(args.html)
+            print(f"Opening HTML report in browser: {html_path}")
+            webbrowser.open('file://' + html_path)
+        except Exception as e:
+            print(f"Could not open HTML report automatically: {e}")
     
-    # Return non-zero exit code if any tests failed
-    if report['failed_cases'] > 0:
-        sys.exit(1)
+    # Return exit code based on success rate
+    return 0 if success_rate == 1.0 else 1
 
 def generate_html_report(results):
     """Generate an HTML report from the evaluation results"""
+    # If results is from history array, use the provided results object
+    # No need to extract the latest since we're passing the specific result
+    
     # Get current timestamp for the report
-    execution_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    execution_time = results.get("timestamp", datetime.now().isoformat())
+    try:
+        execution_time = datetime.fromisoformat(execution_time).strftime("%Y-%m-%d %H:%M:%S")
+    except:
+        pass
     
     # Format the results for display
     formatted_results = []
-    for result in results:
+    for result in results["detailed_results"]:
         # Get expected and actual for formatting
         expected = result.get("expected", {})
         actual = result.get("actual", {})
@@ -732,8 +714,8 @@ def generate_html_report(results):
         })
     
     # Calculate summary statistics
-    total = len(results)
-    passed = sum(1 for r in results if r.get("passed", False))
+    total = len(formatted_results)
+    passed = sum(1 for r in formatted_results if r.get("passed", False))
     pass_rate = passed / total * 100 if total > 0 else 0
     
     # Generate HTML
@@ -882,5 +864,53 @@ def generate_html_report(results):
     
     return html
 
+def save_results(results, output_file, html_file):
+    """Save results to JSON and HTML files"""
+    # Create output directory if it doesn't exist
+    output_dir = os.path.dirname(output_file)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Add timestamp to current results
+    timestamp = datetime.now().isoformat()
+    results_with_meta = {
+        "timestamp": timestamp,
+        "success_rate": results["success_rate"],
+        "total_cases": results["total_cases"],
+        "passed_cases": results["passed_cases"],
+        "failed_cases": results["failed_cases"],
+        "detailed_results": results["detailed_results"]
+    }
+    
+    # Load existing results history if file exists
+    history = []
+    if os.path.exists(output_file):
+        try:
+            with open(output_file, 'r', encoding='utf-8') as f:
+                existing_data = json.load(f)
+                # Check if existing data is already a list or a single result
+                if isinstance(existing_data, list):
+                    history = existing_data
+                else:
+                    # If it's a single result object, convert to a list
+                    history = [existing_data]
+        except (json.JSONDecodeError, FileNotFoundError):
+            # If file is corrupted or doesn't exist, start fresh
+            history = []
+    
+    # Add current results to history
+    history.append(results_with_meta)
+    
+    # Write updated history back to file
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+    
+    # Generate and save HTML report (using only the most recent results)
+    html_content = generate_html_report(results_with_meta)
+    with open(html_file, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    
+    return results_with_meta
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

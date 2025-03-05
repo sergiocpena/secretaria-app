@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize Supabase client
 supabase_url = os.getenv('SUPABASE_URL')
-supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # Use service role key to bypass RLS
+supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # Make sure this is the service role key, not the anon key
 
 # Create and export the client
 supabase = create_client(supabase_url, supabase_key)

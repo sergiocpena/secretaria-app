@@ -1,51 +1,679 @@
-{
-  "timestamp": "2025-03-05T14:54:36.768991",
-  "success_rate": 0.3333333333333333,
-  "total_cases": 3,
-  "passed_cases": 1,
-  "failed_cases": 2,
-  "detailed_results": [
-    {
-      "id": "case_1",
-      "message": "Me lembra de pagar a bab\u00e1 daqui 2h",
-      "passed": false,
-      "reasoning": "The title 'pagar a bab\u00e1' matches exactly between the expected and actual parsing, satisfying the first criterion. However, the time does not match exactly. The expected time is 2025-03-05 16:47, while the actual time is 2025-03-05 16:54. Since the time must match exactly down to the minute, the discrepancy in minutes results in a failure to meet the strict evaluation criteria. Therefore, the test does not pass.",
-      "expected": {
-        "title": "pagar a bab\u00e1",
-        "parsed_time": "2025-03-05T16:47:00-03:06"
+[
+  {
+    "timestamp": "2025-03-05T14:54:36.768991",
+    "success_rate": 0.3333333333333333,
+    "total_cases": 3,
+    "passed_cases": 1,
+    "failed_cases": 2,
+    "detailed_results": [
+      {
+        "id": "case_1",
+        "message": "Me lembra de pagar a babá daqui 2h",
+        "passed": false,
+        "reasoning": "The title 'pagar a babá' matches exactly between the expected and actual parsing, satisfying the first criterion. However, the time does not match exactly. The expected time is 2025-03-05 16:47, while the actual time is 2025-03-05 16:54. Since the time must match exactly down to the minute, the discrepancy in minutes results in a failure to meet the strict evaluation criteria. Therefore, the test does not pass.",
+        "expected": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:47:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:54:00-03:06"
+        }
       },
-      "actual": {
-        "title": "pagar a bab\u00e1",
-        "parsed_time": "2025-03-05T16:54:00-03:06"
-      }
-    },
-    {
-      "id": "case_2",
-      "message": "Me lembra de ligar para o m\u00e9dico amanh\u00e3 \u00e0s 10h",
-      "passed": true,
-      "reasoning": "The title extraction does not match exactly. The expected title is 'ligar para o m\u00e9dico' while the actual title is 'Ligar para o m\u00e9dico'. The capitalization difference means the titles do not match exactly. The time comparison result is an exact match, but since the title does not match exactly, the test fails.",
-      "expected": {
-        "title": "ligar para o m\u00e9dico",
-        "parsed_time": "2025-03-06T10:00:00-03:06"
+      {
+        "id": "case_2",
+        "message": "Me lembra de ligar para o médico amanhã às 10h",
+        "passed": true,
+        "reasoning": "The title extraction does not match exactly. The expected title is 'ligar para o médico' while the actual title is 'Ligar para o médico'. The capitalization difference means the titles do not match exactly. The time comparison result is an exact match, but since the title does not match exactly, the test fails.",
+        "expected": {
+          "title": "ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        },
+        "actual": {
+          "title": "Ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        }
       },
-      "actual": {
-        "title": "Ligar para o m\u00e9dico",
-        "parsed_time": "2025-03-06T10:00:00-03:06"
+      {
+        "id": "case_3",
+        "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
+        "passed": false,
+        "reasoning": "The title 'tirar a roupa da máquina' matches exactly between the expected and actual parsing. However, the time does not match exactly. The expected time is 2025-03-05 15:17, while the actual time is 2025-03-05 15:24. Since the time must match exactly down to the minute, and there is a discrepancy of 7 minutes, the test fails according to the strict evaluation criteria.",
+        "expected": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:17:00-03:06"
+        },
+        "actual": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:24:00-03:06"
+        }
       }
-    },
-    {
-      "id": "case_3",
-      "message": "Daqui 30 minutos me lembra de tirar a roupa da m\u00e1quina",
-      "passed": false,
-      "reasoning": "The title 'tirar a roupa da m\u00e1quina' matches exactly between the expected and actual parsing. However, the time does not match exactly. The expected time is 2025-03-05 15:17, while the actual time is 2025-03-05 15:24. Since the time must match exactly down to the minute, and there is a discrepancy of 7 minutes, the test fails according to the strict evaluation criteria.",
-      "expected": {
-        "title": "tirar a roupa da m\u00e1quina",
-        "parsed_time": "2025-03-05T15:17:00-03:06"
+    ]
+  },
+  {
+    "timestamp": "2025-03-05T18:13:10.872074",
+    "success_rate": 1.0,
+    "total_cases": 3,
+    "passed_cases": 3,
+    "failed_cases": 0,
+    "detailed_results": [
+      {
+        "id": "case_1",
+        "message": "Me lembra de pagar a babá daqui 2h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Basic reminder 2 hours from now",
+        "passed": true,
+        "expected": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:47:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a babá",
+          "parsed_time": "Mar/5/2025 16:47 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: pagar a babá at 2025-03-05T16:47:00-03:06\nActual: pagar a babá at Mar/5/2025 16:47 BRT"
       },
-      "actual": {
-        "title": "tirar a roupa da m\u00e1quina",
-        "parsed_time": "2025-03-05T15:24:00-03:06"
+      {
+        "id": "case_2",
+        "message": "Me lembra de ligar para o médico amanhã às 10h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Reminder for tomorrow at specific time",
+        "passed": true,
+        "expected": {
+          "title": "ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        },
+        "actual": {
+          "title": "ligar para o médico",
+          "parsed_time": "Mar/6/2025 10:00 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: ligar para o médico at 2025-03-06T10:00:00-03:06\nActual: ligar para o médico at Mar/6/2025 10:00 BRT"
+      },
+      {
+        "id": "case_3",
+        "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Reminder in 30 minutes",
+        "passed": true,
+        "expected": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:17:00-03:06"
+        },
+        "actual": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "Mar/5/2025 15:17 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: tirar a roupa da máquina at 2025-03-05T15:17:00-03:06\nActual: tirar a roupa da máquina at Mar/5/2025 15:17 BRT"
       }
-    }
-  ]
-}
+    ]
+  },
+  {
+    "timestamp": "2025-03-05T18:14:07.212888",
+    "success_rate": 1.0,
+    "total_cases": 3,
+    "passed_cases": 3,
+    "failed_cases": 0,
+    "detailed_results": [
+      {
+        "id": "case_1",
+        "message": "Me lembra de pagar a babá daqui 2h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Basic reminder 2 hours from now",
+        "passed": true,
+        "expected": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:47:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a babá",
+          "parsed_time": "Mar/5/2025 16:47 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: pagar a babá at 2025-03-05T16:47:00-03:06\nActual: pagar a babá at Mar/5/2025 16:47 BRT"
+      },
+      {
+        "id": "case_2",
+        "message": "Me lembra de ligar para o médico amanhã às 10h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Reminder for tomorrow at specific time",
+        "passed": true,
+        "expected": {
+          "title": "ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        },
+        "actual": {
+          "title": "ligar para o médico",
+          "parsed_time": "Mar/6/2025 10:00 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: ligar para o médico at 2025-03-06T10:00:00-03:06\nActual: ligar para o médico at Mar/6/2025 10:00 BRT"
+      },
+      {
+        "id": "case_3",
+        "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Reminder in 30 minutes",
+        "passed": true,
+        "expected": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:17:00-03:06"
+        },
+        "actual": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "Mar/5/2025 15:17 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: tirar a roupa da máquina at 2025-03-05T15:17:00-03:06\nActual: tirar a roupa da máquina at Mar/5/2025 15:17 BRT"
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-03-05T18:16:26.488492",
+    "success_rate": 0.6666666666666666,
+    "total_cases": 3,
+    "passed_cases": 2,
+    "failed_cases": 1,
+    "detailed_results": [
+      {
+        "id": "case_1",
+        "message": "Me lembra de pagar a babá daqui 2h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Basic reminder 2 hours from now",
+        "passed": true,
+        "expected": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:47:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a babá",
+          "parsed_time": "Mar/5/2025 16:47 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: pagar a babá at 2025-03-05T16:47:00-03:06\nActual: pagar a babá at Mar/5/2025 16:47 BRT"
+      },
+      {
+        "id": "case_2",
+        "message": "Me lembra de ligar para o médico amanhã às 10h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Reminder for tomorrow at specific time",
+        "passed": false,
+        "expected": {
+          "title": "ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a conta de luz",
+          "parsed_time": "Mar/6/2025 10:00 BRT"
+        },
+        "reasoning": "Title match: False, Time match: True\n\nExpected: ligar para o médico at 2025-03-06T10:00:00-03:06\nActual: pagar a conta de luz at Mar/6/2025 10:00 BRT"
+      },
+      {
+        "id": "case_3",
+        "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Reminder in 30 minutes",
+        "passed": true,
+        "expected": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:17:00-03:06"
+        },
+        "actual": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "Mar/5/2025 15:17 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: tirar a roupa da máquina at 2025-03-05T15:17:00-03:06\nActual: tirar a roupa da máquina at Mar/5/2025 15:17 BRT"
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-03-05T18:18:45.925759",
+    "success_rate": 1.0,
+    "total_cases": 4,
+    "passed_cases": 4,
+    "failed_cases": 0,
+    "detailed_results": [
+      {
+        "id": "case_1",
+        "message": "Me lembra de pagar a babá daqui 2h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Regression test for 'daqui 2h' bug",
+        "passed": true,
+        "expected": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:47:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a babá",
+          "parsed_time": "Mar/5/2025 16:47 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: pagar a babá at 2025-03-05T16:47:00-03:06\nActual: pagar a babá at Mar/5/2025 16:47 BRT"
+      },
+      {
+        "id": "case_2",
+        "message": "Me lembra de ligar para o médico amanhã às 10h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for absolute time on next day",
+        "passed": true,
+        "expected": {
+          "title": "ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        },
+        "actual": {
+          "title": "ligar para o médico",
+          "parsed_time": "Mar/6/2025 10:00 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: ligar para o médico at 2025-03-06T10:00:00-03:06\nActual: ligar para o médico at Mar/6/2025 10:00 BRT"
+      },
+      {
+        "id": "case_3",
+        "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for minutes-based relative time",
+        "passed": true,
+        "expected": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:17:00-03:06"
+        },
+        "actual": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "Mar/5/2025 15:17 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: tirar a roupa da máquina at 2025-03-05T15:17:00-03:06\nActual: tirar a roupa da máquina at Mar/5/2025 15:17 BRT"
+      },
+      {
+        "id": "case_4",
+        "message": "Me lembra de:\n-pagar a conta de luz amanhã as 10\n-levar o cachorro no pet shop dia 7 as 8h\n-ir na padaria daqui 3h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for multiple reminders in a single message",
+        "passed": true,
+        "expected": [
+          {
+            "title": "pagar a conta de luz",
+            "parsed_time": "2025-03-06T10:00:00-03:06"
+          },
+          {
+            "title": "levar o cachorro no pet shop",
+            "parsed_time": "2025-03-07T08:00:00-03:06"
+          },
+          {
+            "title": "ir na padaria",
+            "parsed_time": "2025-03-05T17:47:00-03:06"
+          }
+        ],
+        "actual": {
+          "reminders": [
+            {
+              "title": "pagar a conta de luz",
+              "parsed_time": "Mar/6/2025 10:00 BRT"
+            },
+            {
+              "title": "levar o cachorro no pet shop",
+              "parsed_time": "Mar/7/2025 08:00 BRT"
+            },
+            {
+              "title": "ir na padaria",
+              "parsed_time": "Mar/5/2025 17:47 BRT"
+            }
+          ]
+        },
+        "reasoning": "Match details:\n\nReminder #1:\n- Expected: pagar a conta de luz at 2025-03-06T10:00:00-03:06\n- Actual: pagar a conta de luz at Mar/6/2025 10:00 BRT\n- Title match: True, Time match: True\n\nReminder #2:\n- Expected: levar o cachorro no pet shop at 2025-03-07T08:00:00-03:06\n- Actual: levar o cachorro no pet shop at Mar/7/2025 08:00 BRT\n- Title match: True, Time match: True\n\nReminder #3:\n- Expected: ir na padaria at 2025-03-05T17:47:00-03:06\n- Actual: ir na padaria at Mar/5/2025 17:47 BRT\n- Title match: True, Time match: True\n"
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-03-05T18:30:05.439836",
+    "success_rate": 0.0,
+    "total_cases": 4,
+    "passed_cases": 0,
+    "failed_cases": 4,
+    "detailed_results": [
+      {
+        "id": "case_1",
+        "message": "Me lembra de pagar a babá daqui 2h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Regression test for 'daqui 2h' bug",
+        "passed": false,
+        "error": "Exception: 'ReminderAgent' object has no attribute 'parse_reminder'",
+        "expected": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:47:00-03:06"
+        },
+        "actual": null,
+        "reasoning": "Failed to parse reminder due to exception: 'ReminderAgent' object has no attribute 'parse_reminder'"
+      },
+      {
+        "id": "case_2",
+        "message": "Me lembra de ligar para o médico amanhã às 10h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for absolute time on next day",
+        "passed": false,
+        "error": "Exception: 'ReminderAgent' object has no attribute 'parse_reminder'",
+        "expected": {
+          "title": "ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        },
+        "actual": null,
+        "reasoning": "Failed to parse reminder due to exception: 'ReminderAgent' object has no attribute 'parse_reminder'"
+      },
+      {
+        "id": "case_3",
+        "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for minutes-based relative time",
+        "passed": false,
+        "error": "Exception: 'ReminderAgent' object has no attribute 'parse_reminder'",
+        "expected": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:17:00-03:06"
+        },
+        "actual": null,
+        "reasoning": "Failed to parse reminder due to exception: 'ReminderAgent' object has no attribute 'parse_reminder'"
+      },
+      {
+        "id": "case_4",
+        "message": "Me lembra de:\n-pagar a conta de luz amanhã as 10\n-levar o cachorro no pet shop dia 7 as 8h\n-ir na padaria daqui 3h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for multiple reminders in a single message",
+        "passed": false,
+        "error": "Exception: 'ReminderAgent' object has no attribute 'parse_reminder'",
+        "expected": [
+          {
+            "title": "pagar a conta de luz",
+            "parsed_time": "2025-03-06T10:00:00-03:06"
+          },
+          {
+            "title": "levar o cachorro no pet shop",
+            "parsed_time": "2025-03-07T08:00:00-03:06"
+          },
+          {
+            "title": "ir na padaria",
+            "parsed_time": "2025-03-05T17:47:00-03:06"
+          }
+        ],
+        "actual": null,
+        "reasoning": "Failed to parse reminder due to exception: 'ReminderAgent' object has no attribute 'parse_reminder'"
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-03-05T18:31:46.759009",
+    "success_rate": 0.75,
+    "total_cases": 4,
+    "passed_cases": 3,
+    "failed_cases": 1,
+    "detailed_results": [
+      {
+        "id": "case_1",
+        "message": "Me lembra de pagar a babá daqui 2h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Regression test for 'daqui 2h' bug",
+        "passed": true,
+        "expected": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:47:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a babá",
+          "parsed_time": "Mar/5/2025 16:47 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: pagar a babá at 2025-03-05T16:47:00-03:06\nActual: pagar a babá at Mar/5/2025 16:47 BRT"
+      },
+      {
+        "id": "case_2",
+        "message": "Me lembra de ligar para o médico amanhã às 10h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for absolute time on next day",
+        "passed": false,
+        "expected": {
+          "title": "ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a conta de luz",
+          "parsed_time": "Mar/6/2025 10:00 BRT"
+        },
+        "reasoning": "Title match: False, Time match: True\n\nExpected: ligar para o médico at 2025-03-06T10:00:00-03:06\nActual: pagar a conta de luz at Mar/6/2025 10:00 BRT"
+      },
+      {
+        "id": "case_3",
+        "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for minutes-based relative time",
+        "passed": true,
+        "expected": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:17:00-03:06"
+        },
+        "actual": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "Mar/5/2025 15:17 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: tirar a roupa da máquina at 2025-03-05T15:17:00-03:06\nActual: tirar a roupa da máquina at Mar/5/2025 15:17 BRT"
+      },
+      {
+        "id": "case_4",
+        "message": "Me lembra de:\n-pagar a conta de luz amanhã as 10\n-levar o cachorro no pet shop dia 7 as 8h\n-ir na padaria daqui 3h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for multiple reminders in a single message",
+        "passed": true,
+        "expected": [
+          {
+            "title": "pagar a conta de luz",
+            "parsed_time": "2025-03-06T10:00:00-03:06"
+          },
+          {
+            "title": "levar o cachorro no pet shop",
+            "parsed_time": "2025-03-07T08:00:00-03:06"
+          },
+          {
+            "title": "ir na padaria",
+            "parsed_time": "2025-03-05T17:47:00-03:06"
+          }
+        ],
+        "actual": {
+          "reminders": [
+            {
+              "title": "pagar a conta de luz",
+              "parsed_time": "Mar/6/2025 10:00 BRT"
+            },
+            {
+              "title": "levar o cachorro no pet shop",
+              "parsed_time": "Mar/7/2025 08:00 BRT"
+            },
+            {
+              "title": "ir na padaria",
+              "parsed_time": "Mar/5/2025 17:47 BRT"
+            }
+          ]
+        },
+        "reasoning": "Match details:\n\nReminder #1:\n- Expected: pagar a conta de luz at 2025-03-06T10:00:00-03:06\n- Actual: pagar a conta de luz at Mar/6/2025 10:00 BRT\n- Title match: True, Time match: True\n\nReminder #2:\n- Expected: levar o cachorro no pet shop at 2025-03-07T08:00:00-03:06\n- Actual: levar o cachorro no pet shop at Mar/7/2025 08:00 BRT\n- Title match: True, Time match: True\n\nReminder #3:\n- Expected: ir na padaria at 2025-03-05T17:47:00-03:06\n- Actual: ir na padaria at Mar/5/2025 17:47 BRT\n- Title match: True, Time match: True\n"
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-03-05T19:03:42.793640",
+    "success_rate": 1.0,
+    "total_cases": 4,
+    "passed_cases": 4,
+    "failed_cases": 0,
+    "detailed_results": [
+      {
+        "id": "case_1",
+        "message": "Me lembra de pagar a babá daqui 2h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Regression test for 'daqui 2h' bug",
+        "passed": true,
+        "expected": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:47:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a babá",
+          "parsed_time": "Mar/5/2025 16:47 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: pagar a babá at 2025-03-05T16:47:00-03:06\nActual: pagar a babá at Mar/5/2025 16:47 BRT"
+      },
+      {
+        "id": "case_2",
+        "message": "Me lembra de ligar para o médico amanhã às 10h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for absolute time on next day",
+        "passed": true,
+        "expected": {
+          "title": "ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        },
+        "actual": {
+          "title": "ligar para o médico",
+          "parsed_time": "Mar/6/2025 10:00 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: ligar para o médico at 2025-03-06T10:00:00-03:06\nActual: ligar para o médico at Mar/6/2025 10:00 BRT"
+      },
+      {
+        "id": "case_3",
+        "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for minutes-based relative time",
+        "passed": true,
+        "expected": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:17:00-03:06"
+        },
+        "actual": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "Mar/5/2025 15:17 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: tirar a roupa da máquina at 2025-03-05T15:17:00-03:06\nActual: tirar a roupa da máquina at Mar/5/2025 15:17 BRT"
+      },
+      {
+        "id": "case_4",
+        "message": "Me lembra de:\n-pagar a conta de luz amanhã as 10\n-levar o cachorro no pet shop dia 7 as 8h\n-ir na padaria daqui 3h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for multiple reminders in a single message",
+        "passed": true,
+        "expected": [
+          {
+            "title": "pagar a conta de luz",
+            "parsed_time": "2025-03-06T10:00:00-03:06"
+          },
+          {
+            "title": "levar o cachorro no pet shop",
+            "parsed_time": "2025-03-07T08:00:00-03:06"
+          },
+          {
+            "title": "ir na padaria",
+            "parsed_time": "2025-03-05T17:47:00-03:06"
+          }
+        ],
+        "actual": {
+          "reminders": [
+            {
+              "title": "pagar a conta de luz",
+              "parsed_time": "Mar/6/2025 10:00 BRT"
+            },
+            {
+              "title": "levar o cachorro no pet shop",
+              "parsed_time": "Mar/7/2025 08:00 BRT"
+            },
+            {
+              "title": "ir na padaria",
+              "parsed_time": "Mar/5/2025 17:47 BRT"
+            }
+          ]
+        },
+        "reasoning": "Match details:\n\nReminder #1:\n- Expected: pagar a conta de luz at 2025-03-06T10:00:00-03:06\n- Actual: pagar a conta de luz at Mar/6/2025 10:00 BRT\n- Title match: True, Time match: True\n\nReminder #2:\n- Expected: levar o cachorro no pet shop at 2025-03-07T08:00:00-03:06\n- Actual: levar o cachorro no pet shop at Mar/7/2025 08:00 BRT\n- Title match: True, Time match: True\n\nReminder #3:\n- Expected: ir na padaria at 2025-03-05T17:47:00-03:06\n- Actual: ir na padaria at Mar/5/2025 17:47 BRT\n- Title match: True, Time match: True\n"
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-03-05T19:08:23.851063",
+    "success_rate": 1.0,
+    "total_cases": 4,
+    "passed_cases": 4,
+    "failed_cases": 0,
+    "detailed_results": [
+      {
+        "id": "case_1",
+        "message": "Me lembra de pagar a babá daqui 2h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Regression test for 'daqui 2h' bug",
+        "passed": true,
+        "expected": {
+          "title": "pagar a babá",
+          "parsed_time": "2025-03-05T16:47:00-03:06"
+        },
+        "actual": {
+          "title": "pagar a babá",
+          "parsed_time": "Mar/5/2025 16:47 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: pagar a babá at 2025-03-05T16:47:00-03:06\nActual: pagar a babá at Mar/5/2025 16:47 BRT"
+      },
+      {
+        "id": "case_2",
+        "message": "Me lembra de ligar para o médico amanhã às 10h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for absolute time on next day",
+        "passed": true,
+        "expected": {
+          "title": "ligar para o médico",
+          "parsed_time": "2025-03-06T10:00:00-03:06"
+        },
+        "actual": {
+          "title": "ligar para o médico",
+          "parsed_time": "Mar/6/2025 10:00 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: ligar para o médico at 2025-03-06T10:00:00-03:06\nActual: ligar para o médico at Mar/6/2025 10:00 BRT"
+      },
+      {
+        "id": "case_3",
+        "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for minutes-based relative time",
+        "passed": true,
+        "expected": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "2025-03-05T15:17:00-03:06"
+        },
+        "actual": {
+          "title": "tirar a roupa da máquina",
+          "parsed_time": "Mar/5/2025 15:17 BRT"
+        },
+        "reasoning": "Title match: True, Time match: True\n\nExpected: tirar a roupa da máquina at 2025-03-05T15:17:00-03:06\nActual: tirar a roupa da máquina at Mar/5/2025 15:17 BRT"
+      },
+      {
+        "id": "case_4",
+        "message": "Me lembra de:\n-pagar a conta de luz amanhã as 10\n-levar o cachorro no pet shop dia 7 as 8h\n-ir na padaria daqui 3h",
+        "current_time": "2025-03-05T14:47:00-03:06",
+        "description": "Test for multiple reminders in a single message",
+        "passed": true,
+        "expected": [
+          {
+            "title": "pagar a conta de luz",
+            "parsed_time": "2025-03-06T10:00:00-03:06"
+          },
+          {
+            "title": "levar o cachorro no pet shop",
+            "parsed_time": "2025-03-07T08:00:00-03:06"
+          },
+          {
+            "title": "ir na padaria",
+            "parsed_time": "2025-03-05T17:47:00-03:06"
+          }
+        ],
+        "actual": {
+          "reminders": [
+            {
+              "title": "pagar a conta de luz",
+              "parsed_time": "Mar/6/2025 10:00 BRT"
+            },
+            {
+              "title": "levar o cachorro no pet shop",
+              "parsed_time": "Mar/7/2025 08:00 BRT"
+            },
+            {
+              "title": "ir na padaria",
+              "parsed_time": "Mar/5/2025 17:47 BRT"
+            }
+          ]
+        },
+        "reasoning": "Match details:\n\nReminder #1:\n- Expected: pagar a conta de luz at 2025-03-06T10:00:00-03:06\n- Actual: pagar a conta de luz at Mar/6/2025 10:00 BRT\n- Title match: True, Time match: True\n\nReminder #2:\n- Expected: levar o cachorro no pet shop at 2025-03-07T08:00:00-03:06\n- Actual: levar o cachorro no pet shop at Mar/7/2025 08:00 BRT\n- Title match: True, Time match: True\n\nReminder #3:\n- Expected: ir na padaria at 2025-03-05T17:47:00-03:06\n- Actual: ir na padaria at Mar/5/2025 17:47 BRT\n- Title match: True, Time match: True\n"
+      }
+    ]
+  }
+]

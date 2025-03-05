@@ -513,7 +513,7 @@ def compare_with_llm(expected, actual, match_details, all_match):
 def main():
     """Run the evaluation"""
     parser = argparse.ArgumentParser(description='Evaluate reminder agent on test cases')
-    parser.add_argument('--test-cases', default='test_data/reminder_test_cases.json',
+    parser.add_argument('--test-cases', default='agents/reminder_agent/reminder_test_dataset.json',
                       help='Path to test cases JSON file')
     parser.add_argument('--output', default='test_results/reminder_eval_results.json',
                       help='Path to output JSON file')

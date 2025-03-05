@@ -44,12 +44,6 @@ def handle_message(from_number, message_body, message_type='text'):
         # Store the incoming message
         store_conversation(from_number, message_body, message_type, True)
         
-        # Check if it's a reminder-related message
-        # This will be handled by the main file, so we'll return None
-        # to indicate that this agent doesn't handle this message
-        if is_reminder_message(message_body):
-            return None
-        
         # Get AI response for general conversation
         response = get_ai_response(message_body, is_audio_transcription=(message_type == 'audio'))
         
@@ -60,19 +54,6 @@ def handle_message(from_number, message_body, message_type='text'):
     except Exception as e:
         logger.error(f"Error handling message: {str(e)}")
         return "Desculpe, ocorreu um erro ao processar sua mensagem."
-
-def is_reminder_message(message):
-    """
-    Check if a message is related to reminders.
-    This is a simple check that will be replaced by the more sophisticated
-    reminder intent detection in the main file.
-    """
-    message_lower = message.lower()
-    reminder_keywords = [
-        "lembrete", "lembrar", "me lembra", "me lembre", 
-        "reminder", "remind me", "lembretes"
-    ]
-    return any(keyword in message_lower for keyword in reminder_keywords)
 
 def get_conversation_context(from_number, limit=5):
     """

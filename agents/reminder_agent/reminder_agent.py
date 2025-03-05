@@ -559,26 +559,40 @@ class ReminderAgent:
                     microsecond=0
                 )
                 
-                # Add timezone info (Brazil)
+                # Add timezone info
                 dt = brazil_tz.localize(dt)
                 
-                # Convert to UTC
-                dt_utc = dt.astimezone(timezone.utc)
-                logger.info(f"Final datetime (UTC): {dt_utc}")
+                # Check if this was a relative time expression
+                is_relative = parsed.get('relative', False)
                 
-                return dt_utc
+                # For relative time expressions, we should never adjust the date further
+                # as the LLM has already calculated the correct target time
+                if not is_relative:
+                    # Only adjust non-relative times if they're in the past
+                    if dt < now_local:
+                        # If it's today but earlier time, move to tomorrow
+                        if dt.date() == now_local.date():
+                            dt = dt + timedelta(days=1)
+                            logger.info(f"Adjusted past time to tomorrow: {dt}")
+                else:
+                    logger.info(f"Keeping relative time as is: {dt}")
                 
-            except (KeyError, ValueError) as e:
-                logger.error(f"Error creating datetime from LLM response: {str(e)}")
-                # Fall back to tomorrow at noon
+                # Convert to UTC for storage
+                utc_dt = dt.astimezone(timezone.utc)
+                logger.info(f"Final parsed datetime (UTC): {utc_dt}")
+                return utc_dt
+                
+            except Exception as e:
+                logger.error(f"Error creating datetime object: {str(e)}")
+                # Fallback to tomorrow noon
                 tomorrow_noon = (now_local + timedelta(days=1)).replace(
                     hour=12, minute=0, second=0, microsecond=0
                 )
                 return tomorrow_noon.astimezone(timezone.utc)
-                
+        
         except Exception as e:
-            logger.error(f"Error in parse_datetime_with_llm: {str(e)}")
-            # Return default time (tomorrow at noon)
+            logger.error(f"Error parsing datetime with LLM: {str(e)}")
+            # Fallback to tomorrow noon
             brazil_tz = pytz.timezone('America/Sao_Paulo')
             now_local = datetime.now(brazil_tz)
             tomorrow_noon = (now_local + timedelta(days=1)).replace(

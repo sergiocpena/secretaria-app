@@ -28,6 +28,7 @@ from agents.reminder_agent.reminder_db import (
 )
 from agents.general_agent.general_agent import get_ai_response, handle_message, get_conversation_context
 from agents.reminder_agent.reminder_agent import ReminderAgent
+from intent_classifier.classifier import IntentClassifier
 
 # Configure logging
 log_level = os.getenv('LOG_LEVEL', 'INFO')
@@ -172,8 +173,11 @@ def send_whatsapp_message(to_number, body):
         logger.error(f"Error queueing message: {str(e)}")
         return False
 
+# Initialize the classifier
+intent_classifier = IntentClassifier()
+
 # Initialize the ReminderAgent after send_whatsapp_message is defined
-reminder_agent = ReminderAgent(send_message_func=send_whatsapp_message)
+reminder_agent = ReminderAgent(send_message_func=send_whatsapp_message, intent_classifier=intent_classifier)
 
 # ===== EXISTING FUNCTIONS =====
 
@@ -195,31 +199,6 @@ def start_self_ping():
     ping_thread = threading.Thread(target=ping_self, daemon=True)
     ping_thread.start()
     logger.info("Self-ping background thread started")
-
-def get_ai_response(message, is_audio_transcription=False):
-    try:
-        system_message = "You are a helpful WhatsApp assistant. Be concise and friendly in your responses."
-        
-        # Adicionar contexto sobre capacidade de áudio se for uma transcrição
-        if is_audio_transcription:
-            system_message += " You can process voice messages through transcription. The following message was received as an audio and transcribed to text."
-        
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": message}
-            ],
-            max_tokens=150
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"OpenAI API Error: {str(e)}")
-        return "Desculpe, estou com dificuldades para processar sua solicitação no momento."
-
-# ===== FUNÇÕES DE LEMBRETES =====
-
-# ===== FIM DAS FUNÇÕES DE LEMBRETES =====
 
 def process_image(image_url):
     """Process an image using OpenAI's vision model"""
@@ -397,20 +376,20 @@ def process_message_async(from_number, body, num_media, form_values):
                 logger.info(f"Processing audio from {from_number}")
                 transcribed_text = transcribe_audio(media_urls[0][0])
                 
-                # Check for reminder intent in transcription
-                is_reminder, intent = reminder_agent.detect_reminder_intent(transcribed_text)
+                # Check for intent in transcription
+                intent_type, intent_details = intent_classifier.detect_intent(transcribed_text)
                 
-                if is_reminder:
+                if intent_type == "reminder":
                     response_text = reminder_agent.handle_reminder_intent(user_phone, transcribed_text)
                 else:
                     response_text = get_ai_response(transcribed_text, is_audio_transcription=True)
         else:
-            # Check for reminder intent
-            is_reminder, intent = reminder_agent.detect_reminder_intent(body)
+            # Check for intent
+            intent_type, intent_details = intent_classifier.detect_intent(body)
             
-            if is_reminder:
+            if intent_type == "reminder":
                 # Handle reminder intent
-                logger.info(f"Reminder intent detected: {intent}")
+                logger.info(f"Reminder intent detected: {intent_details}")
                 response_text = reminder_agent.handle_reminder_intent(user_phone, body)
             else:
                 # Handle general conversation

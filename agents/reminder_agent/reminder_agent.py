@@ -14,9 +14,10 @@ from agents.reminder_agent.reminder_db import (
 logger = logging.getLogger(__name__)
 
 class ReminderAgent:
-    def __init__(self, send_message_func=None):
+    def __init__(self, send_message_func=None, intent_classifier=None):
         """Initialize the ReminderAgent with necessary dependencies"""
         self.send_message_func = send_message_func
+        self.intent_classifier = intent_classifier
     
     def handle_reminder_intent(self, user_phone, message_text):
         """Processa intenções relacionadas a lembretes"""
@@ -791,100 +792,6 @@ class ReminderAgent:
                 "deactivated": 0,
                 "error": str(e)
             }
-
-    def detect_reminder_intent(self, message):
-        """Detecta a intenção relacionada a lembretes usando o LLM"""
-        try:
-            logger.info(f"Detecting reminder intent with LLM for message: '{message[:50]}...' (truncated)")
-            
-            system_prompt = """
-            Você é um assistente especializado em detectar intenções relacionadas a lembretes em mensagens em português.
-            
-            Analise a mensagem do usuário e identifique se ela contém uma intenção relacionada a lembretes.
-            
-            Retorne um JSON com o seguinte formato:
-            {
-              "is_reminder": true/false,
-              "intent": "criar" ou "listar" ou "cancelar" ou "clarify" ou null
-            }
-            
-            Onde:
-            - "is_reminder": indica se a mensagem contém uma intenção relacionada a lembretes
-            - "intent": o tipo específico de intenção
-              - "criar": para criar um novo lembrete
-              - "listar": para listar lembretes existentes
-              - "cancelar": para cancelar um lembrete existente
-              - "clarify": quando menciona lembretes mas a intenção não está clara
-              - null: quando não é uma intenção relacionada a lembretes
-            
-            Exemplos:
-            - "me lembra de pagar a conta amanhã" → {"is_reminder": true, "intent": "criar"}
-            - "meus lembretes" → {"is_reminder": true, "intent": "listar"}
-            - "cancelar lembrete 2" → {"is_reminder": true, "intent": "cancelar"}
-            - "lembrete" → {"is_reminder": true, "intent": "clarify"}
-            - "como está o tempo hoje?" → {"is_reminder": false, "intent": null}
-            """
-            
-            import time as time_module
-            import openai
-            
-            start_time = time_module.time()
-            response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message}
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.1
-            )
-            elapsed_time = time_module.time() - start_time
-            
-            result = json.loads(response.choices[0].message.content)
-            logger.info(f"LLM intent detection result: {result} (took {elapsed_time:.2f}s)")
-            
-            is_reminder = result.get("is_reminder", False)
-            intent = result.get("intent")
-            
-            logger.info(f"Intent detection result: is_reminder={is_reminder}, intent={intent}")
-            
-            return is_reminder, intent
-            
-        except Exception as e:
-            logger.error(f"Error in LLM intent detection: {str(e)}")
-            logger.info("Falling back to keyword-based detection")
-            # Fall back to simple keyword detection if LLM fails
-            return self._detect_reminder_intent_keywords(message)
-        
-    def _detect_reminder_intent_keywords(self, message):
-        """Simple keyword-based fallback for reminder intent detection"""
-        message_lower = message.lower()
-        
-        # Verificação de listagem de lembretes
-        list_keywords = ["meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes", "quais são meus lembretes"]
-        for keyword in list_keywords:
-            if keyword in message_lower:
-                return True, "listar"
-        
-        # Verificação de cancelamento de lembretes
-        cancel_keywords = ["cancelar lembrete", "apagar lembrete", "remover lembrete", "deletar lembrete", 
-                           "excluir lembrete", "cancelar lembretes", "apagar lembretes", "remover lembretes", 
-                           "deletar lembretes", "excluir lembretes"]
-        for keyword in cancel_keywords:
-            if keyword in message_lower:
-                return True, "cancelar"
-        
-        # Verificação de criação de lembretes
-        create_keywords = ["me lembra", "me lembre", "lembre-me", "criar lembrete", "novo lembrete", "adicionar lembrete"]
-        for keyword in create_keywords:
-            if keyword in message_lower:
-                return True, "criar"
-        
-        # Se apenas a palavra "lembrete" ou "lembretes" estiver presente, perguntar o que o usuário deseja fazer
-        if "lembrete" in message_lower or "lembretes" in message_lower:
-            return True, "clarify"
-            
-        return False, None
 
     def start_reminder_checker(self):
         """Inicia o verificador de lembretes em uma thread separada como backup"""

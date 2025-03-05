@@ -329,6 +329,12 @@ class ReminderAgent:
                 
                 Analise a mensagem do usuário e extraia os detalhes do lembrete, incluindo título e data/hora.
                 
+                IMPORTANTE SOBRE EXPRESSÕES TEMPORAIS RELATIVAS:
+                - "daqui X minutos/horas/dias" SEMPRE significa X minutos/horas/dias a partir do momento atual
+                - "daqui 2h" significa exatamente 2 horas a partir de agora, HOJE {current_day}/{current_month}/{current_year}
+                - "amanhã" significa o dia seguinte
+                - "hoje" significa o dia atual
+                
                 Retorne um JSON com o seguinte formato:
                 {{
                   "reminders": [

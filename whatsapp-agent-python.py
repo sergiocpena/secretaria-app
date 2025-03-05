@@ -74,6 +74,7 @@ BRAZIL_TIMEZONE = pytz.timezone('America/Sao_Paulo')
 
 def message_sender_worker():
     """Background worker that processes the message queue and handles retries"""
+    logger.info("Message sender worker started")
     while True:
         try:
             # Get message from queue (blocks until a message is available)
@@ -113,47 +114,33 @@ def message_sender_worker():
                 
                 logger.info(f"Message sent successfully: {message.sid} (status: {message.status})")
                 message_queue.task_done()
-                
             except TwilioRestException as e:
-                logger.error(f"Twilio error: {str(e)}")
-                logger.error(f"Twilio error code: {e.code}, status: {e.status}")
+                logger.error(f"Twilio error sending message: {str(e)}")
                 
-                # Check if we should retry
-                if retry_count < MAX_RETRIES:
-                    # Increment retry count and put back in queue
+                # Handle rate limiting
+                if e.code == 20429:
+                    logger.warning("Rate limit exceeded, will retry later")
+                    # Increase retry count
                     message_data['retry_count'] = retry_count + 1
-                    message_data['message_sid'] = message_sid
-                    logger.info(f"Scheduling retry {retry_count + 1}/{MAX_RETRIES} in {RETRY_DELAY} seconds")
-                    
-                    # Wait before retrying
-                    time_module.sleep(RETRY_DELAY)
-                    message_queue.put(message_data)
+                    # Add back to queue if under max retries
+                    if retry_count < MAX_RETRIES:
+                        logger.info(f"Re-queueing message (retry {retry_count+1}/{MAX_RETRIES})")
+                        time_module.sleep(RETRY_DELAY)
+                        message_queue.put(message_data)
+                    else:
+                        logger.error(f"Max retries ({MAX_RETRIES}) reached, dropping message")
                 else:
-                    logger.error(f"Failed to send message after {MAX_RETRIES} attempts")
+                    logger.error(f"Unhandled Twilio error: {e.code} - {e.msg}")
                 
                 message_queue.task_done()
-                
             except Exception as e:
-                logger.error(f"Unexpected error in message sender: {str(e)}")
-                logger.error(f"Error type: {type(e).__name__}")
-                
-                # Check if we should retry
-                if retry_count < MAX_RETRIES:
-                    # Increment retry count and put back in queue
-                    message_data['retry_count'] = retry_count + 1
-                    logger.info(f"Scheduling retry {retry_count + 1}/{MAX_RETRIES} in {RETRY_DELAY} seconds")
-                    
-                    # Wait before retrying
-                    time_module.sleep(RETRY_DELAY)
-                    message_queue.put(message_data)
-                else:
-                    logger.error(f"Failed to send message after {MAX_RETRIES} attempts")
-                
+                logger.error(f"Error sending message: {str(e)}")
                 message_queue.task_done()
                 
         except Exception as e:
             logger.error(f"Error in message sender worker: {str(e)}")
-            # Continue the loop to process the next message
+            # Don't break the loop on error
+            time_module.sleep(1)
 
 def start_message_sender():
     """Start the background message sender thread"""
@@ -461,6 +448,29 @@ def health_check():
     # Use the health logger instead of the main logger
     health_logger.debug(f"Health check at {datetime.now().isoformat()}")
     return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
+
+@app.route('/api/check-reminders', methods=['POST'])
+def api_check_reminders():
+    """Endpoint para verificar e enviar lembretes pendentes"""
+    try:
+        # Verificar autenticação
+        api_key = request.headers.get('X-API-Key')
+        if api_key != os.getenv('REMINDER_API_KEY'):
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        # Ensure message sender thread is running
+        if not hasattr(app, 'message_sender_thread') or not app.message_sender_thread.is_alive():
+            logger.info("Starting message sender thread for reminder check")
+            app.message_sender_thread = start_message_sender()
+        
+        # Processar lembretes using the reminder agent
+        result = reminder_agent.check_and_send_reminders()
+        
+        return jsonify(result)
+    
+    except Exception as e:
+        logger.error(f"Error in check-reminders endpoint: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     # Start the message sender thread

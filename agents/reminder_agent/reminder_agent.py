@@ -17,7 +17,11 @@ logger = logging.getLogger("ReminderAgent")
 
 class ReminderAgent:
     def __init__(self):
+        """
+        Initialize the reminder agent
+        """
         self.timezone = pytz.timezone('America/Sao_Paulo')
+        
         # Initialize client only if API key is available
         self.client = None
         

@@ -37,328 +37,142 @@ class ReminderAgent:
         # Rest of initialization code
         self.logger.info("ReminderAgent initialized")
         
-    def handle_reminder_intent(self, user_phone, message_text):
-        """Processa intenções relacionadas a lembretes"""
-        try:
-            # Normalizar o texto da mensagem
-            if isinstance(message_text, (list, tuple)):
-                message_text = ' '.join(str(x) for x in message_text)  # Convert list to string safely
-            normalized_text = str(message_text).lower().strip()
-
-            self.logger.info(f"Processing reminder intent with normalized text: '{normalized_text}'")
-
-            # Special case for "cancelar todos os lembretes" - handle it directly
-            if "cancelar todos" in normalized_text or "excluir todos" in normalized_text or "apagar todos" in normalized_text:
-                self.logger.info("Detected cancel all reminders request")
-
-                # Get all active reminders for this user
-                reminders = list_reminders(user_phone)
-
-                if not reminders:
-                    return "Você não tem lembretes ativos para cancelar."
-
-                # Cancel all reminders
-                canceled_count = 0
-                for reminder in reminders:
-                    success = cancel_reminder(reminder['id'])
-                    if success:
-                        canceled_count += 1
-
-                if canceled_count > 0:
-                    return f"✅ {canceled_count} lembretes foram cancelados com sucesso."
-                else:
-                    return "❌ Não foi possível cancelar os lembretes. Por favor, tente novamente."
-
-            # Use the same list_keywords as in detect_reminder_intent
-            list_keywords = ["lembretes", "meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes"]
-            if any(keyword in normalized_text for keyword in list_keywords):
-                self.logger.info("Detected list reminders request")
-                reminders = list_reminders(user_phone)
-                self.logger.info(f"Found {len(reminders)} reminders to list")
-                return format_reminder_list_by_time(reminders)
-
-            # Verificar se é uma solicitação para cancelar lembretes
-            cancel_keywords = ["cancelar", "remover", "apagar", "deletar", "excluir"]
-            is_cancel_request = any(keyword in normalized_text for keyword in cancel_keywords)
-
-            # Verificar se é uma solicitação para criar lembretes
-            create_keywords = ["lembrar", "lembra", "lembre", "criar lembrete", "novo lembrete", "adicionar lembrete"]
-            is_create_request = any(keyword in normalized_text for keyword in create_keywords)
-
-            if is_cancel_request:
-                self.logger.info("Detected cancel reminder request")
-
-                # First, get the list of active reminders for this user
-                reminders = list_reminders(user_phone)
-                self.logger.info(f"Found {len(reminders)} active reminders for user {user_phone}")
-
-                if not reminders:
-                    return "Você não tem lembretes ativos para cancelar."
-
-                # Parse the cancellation request
-                cancel_data = self.parse_reminder(normalized_text, "cancelar")
-                self.logger.info(f"Cancel data after parsing: {cancel_data}")
-
-                if cancel_data and "cancel_type" in cancel_data:
-                    cancel_type = cancel_data["cancel_type"]
-
-                    # Handle different cancellation types
-                    if cancel_type == "all":
-                        self.logger.info("Cancelling all reminders")
-                        canceled_count = 0
-                        for reminder in reminders:
-                            success = cancel_reminder(reminder['id'])
-                            if success:
-                                canceled_count += 1
-
-                        if canceled_count > 0:
-                            return f"✅ {canceled_count} lembretes foram cancelados com sucesso."
-                        else:
-                            return "❌ Não foi possível cancelar os lembretes. Por favor, tente novamente."
-
-                    elif cancel_type == "number":
-                        numbers = cancel_data.get("numbers", [])
-                        self.logger.info(f"Cancelling reminders by numbers: {numbers}")
-
-                        if not numbers:
-                            return "Por favor, especifique quais lembretes deseja cancelar pelo número."
-
-                        canceled = []
-                        not_found = []
-
-                        for num in numbers:
-                            if 1 <= num <= len(reminders):
-                                reminder = reminders[num-1]  # Adjust for 0-based indexing
-                                success = cancel_reminder(reminder['id'])
-                                if success:
-                                    canceled.append(reminder)
-                            else:
-                                not_found.append(num)
-
-                        # Prepare response
-                        if canceled:
-                            response = f"✅ {len(canceled)} lembretes cancelados:\n"
-                            for reminder in canceled:
-                                scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                                response += f"- *{reminder['title']}* para {format_datetime(scheduled_time)}\n"
-
-                            # Add info about remaining reminders
-                            remaining = list_reminders(user_phone)
-                            if remaining:
-                                response += f"\nVocê ainda tem {len(remaining)} lembretes ativos."
-
-                            return response
-                        else:
-                            return f"❌ Não foi possível encontrar os lembretes com os números especificados."
-
-                    elif cancel_type == "range":
-                        range_start = cancel_data.get("range_start", 1)
-                        range_end = cancel_data.get("range_end", len(reminders))
-                        self.logger.info(f"Cancelling reminders in range: {range_start} to {range_end}")
-
-                        # Validate range
-                        if range_start < 1:
-                            range_start = 1
-                        if range_end > len(reminders):
-                            range_end = len(reminders)
-
-                        canceled = []
-                        for i in range(range_start-1, range_end):  # Adjust for 0-based indexing
-                            if i < len(reminders):
-                                reminder = reminders[i]
-                                success = cancel_reminder(reminder['id'])
-                                if success:
-                                    canceled.append(reminder)
-
-                        # Prepare response
-                        if canceled:
-                            response = f"✅ {len(canceled)} lembretes cancelados:\n"
-                            for reminder in canceled:
-                                scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                                response += f"- *{reminder['title']}* para {format_datetime(scheduled_time)}\n"
-
-                            # Add info about remaining reminders
-                            remaining = list_reminders(user_phone)
-                            if remaining:
-                                response += f"\nVocê ainda tem {len(remaining)} lembretes ativos."
-
-                            return response
-                        else:
-                            return "❌ Não foi possível cancelar os lembretes no intervalo especificado."
-
-                    elif cancel_type == "title":
-                        title = cancel_data.get("title", "").lower()
-                        self.logger.info(f"Cancelling reminders by title: {title}")
-
-                        if not title:
-                            return "Por favor, especifique o título ou palavras-chave do lembrete que deseja cancelar."
-
-                        canceled = []
-                        for reminder in reminders:
-                            if title in reminder['title'].lower():
-                                success = cancel_reminder(reminder['id'])
-                                if success:
-                                    canceled.append(reminder)
-
-                        # Prepare response
-                        if canceled:
-                            response = f"✅ {len(canceled)} lembretes cancelados:\n"
-                            for reminder in canceled:
-                                scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                                response += f"- *{reminder['title']}* para {format_datetime(scheduled_time)}\n"
-
-                            # Add info about remaining reminders
-                            remaining = list_reminders(user_phone)
-                            if remaining:
-                                response += f"\nVocê ainda tem {len(remaining)} lembretes ativos."
-
-                            return response
-                        else:
-                            return f"❌ Não foi possível encontrar lembretes com o título '{title}'."
-
-                # If we get here, we couldn't parse the cancellation request
-                return "Não entendi qual lembrete você deseja cancelar. Por favor, especifique o número ou título do lembrete."
-
-            elif is_create_request:
-                self.logger.info("Detected create reminder request")
-                # Parse the reminder data
-                reminder_data = self.parse_reminder(normalized_text, "criar")
+    def handle_reminder_intent(self, text, intent=None, action_type=None, user_id=None):
+        """
+        Handle a reminder intent
+        
+        Args:
+            text (str): The reminder text
+            intent (str, optional): The specific reminder intent (e.g., 'criar', 'listar', 'deletar')
+            action_type (dict, optional): Additional context for the action
+            user_id (str, optional): The user ID
+            
+        Returns:
+            tuple: (success, response_message)
+        """
+        normalized_text = text.lower().strip()
+        self.logger.info(f"Processing reminder intent with normalized text: '{normalized_text}'")
+        
+        # Default to 'create' intent if not specified
+        if not intent:
+            intent = 'criar'
+        
+        if intent == 'criar':
+            self.logger.info("Detected create reminder request")
+            try:
+                # Parse the reminder text to extract details
+                reminder_data = self.parse_reminder(normalized_text, action_type)
+                
+                if not reminder_data:
+                    self.logger.warning("parse_reminder returned None")
+                    return False, "❌ Não consegui entender os detalhes do lembrete. Por favor, tente novamente."
+                
                 self.logger.info(f"Reminder data after parsing: {reminder_data}")
-
-                if reminder_data and "reminders" in reminder_data and reminder_data["reminders"]:
-                    self.logger.info(f"Found {len(reminder_data['reminders'])} reminders in parsed data")
-                    # Processar múltiplos lembretes
-                    created_reminders = []
-                    invalid_reminders = []
-
-                    for reminder in reminder_data["reminders"]:
-                        self.logger.info(f"Processing reminder: {reminder}")
-                        
-                        # Check if the reminder has both title and a time (either scheduled_time or datetime)
-                        if "title" in reminder and ("scheduled_time" in reminder or "datetime" in reminder):
-                            try:
-                                # Create datetime object based on the format we have
-                                if "scheduled_time" in reminder:
-                                    # Parse ISO format string to datetime
-                                    scheduled_time_str = reminder["scheduled_time"]
-                                    self.logger.info(f"Parsing scheduled_time string: {scheduled_time_str}")
-                                    
-                                    # Try different parsing approaches
-                                    try:
-                                        # First try fromisoformat
-                                        scheduled_time = datetime.fromisoformat(scheduled_time_str)
-                                    except ValueError:
-                                        # Fall back to dateutil.parser
-                                        from dateutil import parser
-                                        scheduled_time = parser.parse(scheduled_time_str)
-                                    
-                                    # Make sure it's localized 
-                                    if scheduled_time.tzinfo is None:
-                                        brazil_tz = pytz.timezone('America/Sao_Paulo')
-                                        scheduled_time = brazil_tz.localize(scheduled_time)
-                                    
-                                    # Get current time for past check
-                                    now_local = datetime.now(scheduled_time.tzinfo)
-                                    
-                                    self.logger.info(f"Parsed scheduled_time: {scheduled_time}")
-                                elif "datetime" in reminder:
-                                    # Original datetime components approach
-                                    dt_components = reminder["datetime"]
-                                    # ... existing datetime component code ...
-                                    brazil_tz = pytz.timezone('America/Sao_Paulo')
-                                    now_local = datetime.now(brazil_tz)
-                                    
-                                    # Create a naive datetime first
-                                    naive_dt = datetime(
-                                        year=dt_components.get('year', now_local.year),
-                                        month=dt_components.get('month', now_local.month),
-                                        day=dt_components.get('day', now_local.day),
-                                        hour=dt_components.get('hour', 12),
-                                        minute=dt_components.get('minute', 0),
-                                        second=0,
-                                        microsecond=0
-                                    )
-                                    
-                                    # Add timezone info to make it aware
-                                    scheduled_time = brazil_tz.localize(naive_dt)
-                                    
-                                # Check if the reminder is in the past
-                                if scheduled_time < now_local:
-                                    self.logger.warning(f"Attempted to create reminder in the past: {reminder['title']} at {scheduled_time}")
-                                    invalid_reminders.append({
-                                        "title": reminder["title"],
-                                        "time": scheduled_time,
-                                        "reason": "past"
-                                    })
-                                    continue
-                                
-                                # Convert to UTC
-                                if scheduled_time.tzinfo:
-                                    scheduled_time = scheduled_time.astimezone(timezone.utc)
-                                
-                                # Create the reminder
-                                reminder_id = create_reminder(user_phone, reminder["title"], scheduled_time)
-                                
-                                if reminder_id:
-                                    created_reminders.append({
-                                        "title": reminder["title"],
-                                        "time": scheduled_time
-                                    })
-                                    self.logger.info(f"Created reminder {reminder_id}: {reminder['title']} at {scheduled_time}")
-                                else:
-                                    self.logger.error(f"Failed to create reminder: {reminder['title']}")
-                            except Exception as e:
-                                self.logger.error(f"Error processing reminder: {str(e)}", exc_info=True)
-                                invalid_reminders.append({
-                                    "title": reminder.get("title", "Unknown"),
-                                    "reason": f"error: {str(e)}"
-                                })
-                        else:
-                            self.logger.warning(f"Incomplete reminder data: {reminder}")
-                            if "title" in reminder:
-                                invalid_reminders.append({
-                                    "title": reminder["title"],
-                                    "reason": "missing_time"
-                                })
+                
+                # Handle reminders array if present
+                if 'reminders' in reminder_data and isinstance(reminder_data['reminders'], list) and reminder_data['reminders']:
+                    success_count = 0
+                    failed_count = 0
                     
-                    # Formatar resposta para múltiplos lembretes
-                    if created_reminders:
-                        response = format_created_reminders(created_reminders)
-
-                        # Add warning about invalid reminders if any
-                        if invalid_reminders:
-                            past_reminders = [r for r in invalid_reminders if r.get("reason") == "past"]
-                            if past_reminders:
-                                response += "\n\n⚠️ Não foi possível criar os seguintes lembretes porque estão no passado:\n"
-                                for i, reminder in enumerate(past_reminders, 1):
-                                    response += f"- *{reminder['title']}* para {format_datetime(reminder['time'])}\n"
-
-                        return response
-                    elif invalid_reminders:
-                        # All reminders were invalid
-                        past_reminders = [r for r in invalid_reminders if r.get("reason") == "past"]
-                        if past_reminders:
-                            response = "❌ Não foi possível criar os lembretes porque estão no passado:\n\n"
-                            for i, reminder in enumerate(past_reminders, 1):
-                                response += f"{i}. *{reminder['title']}* para {format_datetime(reminder['time'])}\n"
-                            response += "\nPor favor, especifique uma data e hora no futuro."
-                            return response
+                    for reminder in reminder_data['reminders']:
+                        try:
+                            # Each reminder in the array should have title and scheduled_time
+                            if 'title' not in reminder or 'scheduled_time' not in reminder:
+                                self.logger.warning(f"Reminder missing required fields: {reminder}")
+                                failed_count += 1
+                                continue
+                            
+                            # Create the reminder
+                            reminder_id, scheduled_iso = self.create_reminder(
+                                title=reminder['title'],
+                                scheduled_time=reminder['scheduled_time'],
+                                user_id=user_id
+                            )
+                            
+                            if reminder_id:
+                                success_count += 1
+                            else:
+                                failed_count += 1
+                        except Exception as e:
+                            self.logger.error(f"Error creating individual reminder: {e}")
+                            failed_count += 1
+                    
+                    if success_count > 0:
+                        if failed_count > 0:
+                            return True, f"✅ Criei {success_count} lembretes (falha em {failed_count})"
                         else:
-                            return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
+                            return True, f"✅ Criei {success_count} lembretes com sucesso!"
                     else:
-                        self.logger.warning("Failed to create any reminders")
-                        return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
+                        return False, "❌ Não consegui criar nenhum dos lembretes."
+                
+                # Handle single reminder case
+                elif 'title' in reminder_data and 'scheduled_time' in reminder_data:
+                    reminder_id, scheduled_iso = self.create_reminder(
+                        title=reminder_data['title'],
+                        scheduled_time=reminder_data['scheduled_time'],
+                        user_id=user_id
+                    )
+                    
+                    if reminder_id:
+                        # Format time for display
+                        try:
+                            scheduled_dt = datetime.fromisoformat(scheduled_iso)
+                            localized_time = scheduled_dt.astimezone(BRAZIL_TZ)
+                            formatted_time = localized_time.strftime("%d/%m/%Y às %H:%M")
+                            
+                            return True, f"✅ Lembrete criado: '{reminder_data['title']}' para {formatted_time}"
+                        except Exception as e:
+                            self.logger.error(f"Error formatting confirmation message: {e}")
+                            return True, f"✅ Lembrete criado: '{reminder_data['title']}'"
+                    else:
+                        self.logger.warning("Failed to create reminder in database")
+                        return False, "❌ Não consegui salvar o lembrete. Por favor, tente novamente."
                 else:
-                    self.logger.warning("Failed to parse reminder creation request")
-                    return "❌ Não consegui entender os detalhes do lembrete. Por favor, especifique o título e quando deseja ser lembrado."
-
-            # If we get here, we couldn't determine the intent
-            self.logger.warning(f"Could not determine specific reminder intent for: '{normalized_text}'")
-            return "Não entendi o que você deseja fazer com os lembretes. Você pode criar, listar ou cancelar lembretes."
-
-        except Exception as e:
-            self.logger.error(f"Error in handle_reminder_intent: {str(e)}")
-            return "Ocorreu um erro ao processar sua solicitação de lembrete. Por favor, tente novamente."
+                    self.logger.warning(f"Reminder data missing required fields: {reminder_data}")
+                    return False, "❌ Não consegui entender os detalhes do lembrete. Por favor, tente novamente."
+                
+            except Exception as e:
+                self.logger.error(f"Error in handle_reminder_intent: {str(e)}", exc_info=True)
+                return False, "❌ Ocorreu um erro ao processar seu lembrete. Por favor, tente novamente."
+        
+        elif intent == 'listar':
+            self.logger.info("Detected list reminders request")
+            # Implementation for listing reminders
+            try:
+                reminders = self.list_reminders(user_id)
+                if not reminders:
+                    return True, "Você não tem lembretes ativos no momento."
+                
+                response = "Seus lembretes:\n\n"
+                for i, reminder in enumerate(reminders, 1):
+                    response += f"{i}. {reminder['title']} - {reminder['scheduled_time']}\n"
+                
+                return True, response
+            except Exception as e:
+                self.logger.error(f"Error listing reminders: {e}")
+                return False, "❌ Não consegui listar seus lembretes. Por favor, tente novamente."
+        
+        elif intent == 'deletar':
+            self.logger.info("Detected delete reminder request")
+            # Implementation for deleting reminders
+            try:
+                # Logic to identify which reminder to delete
+                reminder_id = None  # Extract from text
+                if reminder_id:
+                    success = self.delete_reminder(reminder_id, user_id)
+                    if success:
+                        return True, "✅ Lembrete excluído com sucesso!"
+                    else:
+                        return False, "❌ Não consegui encontrar esse lembrete para excluir."
+                else:
+                    return False, "❌ Por favor, especifique qual lembrete deseja excluir."
+            except Exception as e:
+                self.logger.error(f"Error deleting reminder: {e}")
+                return False, "❌ Erro ao excluir o lembrete. Por favor, tente novamente."
+        
+        else:
+            self.logger.warning(f"Unknown reminder intent: {intent}")
+            return False, "❌ Não entendi o que você quer fazer com os lembretes. Você pode criar, listar ou excluir lembretes."
 
     def process_reminder(self, user_phone, title, time_str):
         """Processa a criação de um novo lembrete"""

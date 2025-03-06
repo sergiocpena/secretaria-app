@@ -37,11 +37,18 @@ class ReminderAgent:
         
         if api_key:
             try:
-                from openai import OpenAI
+                # Try to import OpenAI, install if not available
+                try:
+                    from openai import OpenAI
+                except ImportError:
+                    import subprocess
+                    import sys
+                    logger.info("Installing openai package...")
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "openai"])
+                    from openai import OpenAI
+                
                 self.client = OpenAI(api_key=api_key)
                 logger.info("OpenAI client initialized successfully")
-            except ImportError:
-                logger.error("OpenAI package not installed.")
             except Exception as e:
                 logger.error(f"Error initializing OpenAI client: {str(e)}.")
         else:

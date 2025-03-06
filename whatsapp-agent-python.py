@@ -8,6 +8,7 @@ import logging
 import pytz
 import openai
 from dotenv import load_dotenv
+from twilio.rest import Client
 
 # Import from our modules
 from utils.database import supabase

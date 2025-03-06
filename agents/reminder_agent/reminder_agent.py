@@ -24,18 +24,17 @@ logger = logging.getLogger("ReminderAgent")
 BRAZIL_TZ = pytz.timezone('America/Sao_Paulo')
 
 class ReminderAgent:
-    def __init__(self, config=None):
-        # Initialize logger
+    def __init__(self, send_message_func=None):
+        """
+        Initialize the ReminderAgent.
+        
+        Args:
+            send_message_func (callable, optional): Function to send messages back to the user
+        """
         self.logger = logging.getLogger(__name__)
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-            self.logger.setLevel(logging.INFO)
+        self.send_message_func = send_message_func
         
         # Rest of initialization code
-        self.config = config or {}
         self.logger.info("ReminderAgent initialized")
         
     def handle_reminder_intent(self, user_phone, message_text):

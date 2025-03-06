@@ -233,44 +233,72 @@ class ReminderAgent:
 
                     for reminder in reminder_data["reminders"]:
                         self.logger.info(f"Processing reminder: {reminder}")
-                        if "title" in reminder and "datetime" in reminder:
-                            # Process datetime components
-                            dt_components = reminder["datetime"]
+                        
+                        # Check if the reminder has both title and a time (either scheduled_time or datetime)
+                        if "title" in reminder and ("scheduled_time" in reminder or "datetime" in reminder):
                             try:
-                                # Create datetime object from components
-                                brazil_tz = pytz.timezone('America/Sao_Paulo')
-                                now_local = datetime.now(brazil_tz)
-
-                                # Create a naive datetime first
-                                naive_dt = datetime(
-                                    year=dt_components.get('year', now_local.year),
-                                    month=dt_components.get('month', now_local.month),
-                                    day=dt_components.get('day', now_local.day),
-                                    hour=dt_components.get('hour', 12),
-                                    minute=dt_components.get('minute', 0),
-                                    second=0,
-                                    microsecond=0
-                                )
-
-                                # Add timezone info to make it aware
-                                dt = brazil_tz.localize(naive_dt)
-
+                                # Create datetime object based on the format we have
+                                if "scheduled_time" in reminder:
+                                    # Parse ISO format string to datetime
+                                    scheduled_time_str = reminder["scheduled_time"]
+                                    self.logger.info(f"Parsing scheduled_time string: {scheduled_time_str}")
+                                    
+                                    # Try different parsing approaches
+                                    try:
+                                        # First try fromisoformat
+                                        scheduled_time = datetime.fromisoformat(scheduled_time_str)
+                                    except ValueError:
+                                        # Fall back to dateutil.parser
+                                        from dateutil import parser
+                                        scheduled_time = parser.parse(scheduled_time_str)
+                                    
+                                    # Make sure it's localized 
+                                    if scheduled_time.tzinfo is None:
+                                        brazil_tz = pytz.timezone('America/Sao_Paulo')
+                                        scheduled_time = brazil_tz.localize(scheduled_time)
+                                    
+                                    # Get current time for past check
+                                    now_local = datetime.now(scheduled_time.tzinfo)
+                                    
+                                    self.logger.info(f"Parsed scheduled_time: {scheduled_time}")
+                                elif "datetime" in reminder:
+                                    # Original datetime components approach
+                                    dt_components = reminder["datetime"]
+                                    # ... existing datetime component code ...
+                                    brazil_tz = pytz.timezone('America/Sao_Paulo')
+                                    now_local = datetime.now(brazil_tz)
+                                    
+                                    # Create a naive datetime first
+                                    naive_dt = datetime(
+                                        year=dt_components.get('year', now_local.year),
+                                        month=dt_components.get('month', now_local.month),
+                                        day=dt_components.get('day', now_local.day),
+                                        hour=dt_components.get('hour', 12),
+                                        minute=dt_components.get('minute', 0),
+                                        second=0,
+                                        microsecond=0
+                                    )
+                                    
+                                    # Add timezone info to make it aware
+                                    scheduled_time = brazil_tz.localize(naive_dt)
+                                    
                                 # Check if the reminder is in the past
-                                if dt < now_local:
-                                    self.logger.warning(f"Attempted to create reminder in the past: {reminder['title']} at {dt}")
+                                if scheduled_time < now_local:
+                                    self.logger.warning(f"Attempted to create reminder in the past: {reminder['title']} at {scheduled_time}")
                                     invalid_reminders.append({
                                         "title": reminder["title"],
-                                        "time": dt,
+                                        "time": scheduled_time,
                                         "reason": "past"
                                     })
                                     continue
-
+                                
                                 # Convert to UTC
-                                scheduled_time = dt.astimezone(timezone.utc)
-
-                                # Criar o lembrete
+                                if scheduled_time.tzinfo:
+                                    scheduled_time = scheduled_time.astimezone(timezone.utc)
+                                
+                                # Create the reminder
                                 reminder_id = create_reminder(user_phone, reminder["title"], scheduled_time)
-
+                                
                                 if reminder_id:
                                     created_reminders.append({
                                         "title": reminder["title"],
@@ -280,8 +308,19 @@ class ReminderAgent:
                                 else:
                                     self.logger.error(f"Failed to create reminder: {reminder['title']}")
                             except Exception as e:
-                                self.logger.error(f"Error processing datetime: {str(e)}")
-
+                                self.logger.error(f"Error processing reminder: {str(e)}", exc_info=True)
+                                invalid_reminders.append({
+                                    "title": reminder.get("title", "Unknown"),
+                                    "reason": f"error: {str(e)}"
+                                })
+                        else:
+                            self.logger.warning(f"Incomplete reminder data: {reminder}")
+                            if "title" in reminder:
+                                invalid_reminders.append({
+                                    "title": reminder["title"],
+                                    "reason": "missing_time"
+                                })
+                    
                     # Formatar resposta para múltiplos lembretes
                     if created_reminders:
                         response = format_created_reminders(created_reminders)

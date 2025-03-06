@@ -3,38 +3,39 @@ General agent implementation.
 This file contains functions for handling general conversations.
 """
 import logging
-import openai
 import os
 from datetime import datetime
 import pytz
 
 from agents.general_agent.general_db import store_conversation, get_conversation_history
+from utils.llm_utils import chat_completion
 
 logger = logging.getLogger(__name__)
 
-def get_ai_response(message, is_audio_transcription=False):
-    """
-    Get a response from the AI for a general conversation message.
-    """
-    try:
-        system_message = "You are a helpful WhatsApp assistant. Be concise and friendly in your responses."
-        
-        # Adicionar contexto sobre capacidade de áudio se for uma transcrição
-        if is_audio_transcription:
-            system_message += " You can process voice messages through transcription. The following message was received as an audio and transcribed to text."
-        
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": message}
-            ],
-            max_tokens=150
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"OpenAI API Error: {str(e)}")
-        return "Desculpe, estou com dificuldades para processar sua solicitação no momento."
+def get_ai_response(user_message, conversation_history=None, system_prompt=None):
+    """Get a response from the AI model"""
+    # Build the messages array
+    messages = []
+    
+    # Add system prompt if provided
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    
+    # Add conversation history if provided
+    if conversation_history:
+        messages.extend(conversation_history)
+    
+    # Add the user's message
+    messages.append({"role": "user", "content": user_message})
+    
+    # Use the centralized chat_completion function
+    response = chat_completion(
+        messages=messages,
+        model="gpt-4o-mini",  # or whatever model you're using
+        temperature=0.7
+    )
+    
+    return response
 
 def handle_message(from_number, message_body, message_type='text'):
     """

@@ -28,6 +28,7 @@ from utils.whatsapp_utils import (
     webhook_handler, send_direct_message_handler, process_message_async
 )
 from utils.media_utils import process_image, transcribe_audio
+from utils.llm_utils import initialize_openai
 
 # Configure logging
 log_level = os.getenv('LOG_LEVEL', 'INFO')
@@ -59,13 +60,14 @@ load_dotenv()
 app = Flask(__name__)
 
 # Initialize OpenAI
-openai.api_key = os.getenv('OPENAI_API_KEY')
+if not initialize_openai(os.getenv('OPENAI_API_KEY')):
+    logger.error("Failed to initialize OpenAI client. Some features may not work.")
 
 # Initialize the classifier
 intent_classifier = IntentClassifier()
 
-# Initialize the ReminderAgent with the OpenAI API key
-reminder_agent = ReminderAgent(api_key=os.getenv('OPENAI_API_KEY'))
+# Initialize the ReminderAgent
+reminder_agent = ReminderAgent(send_message_func=send_whatsapp_message)
 
 # Use a lazy initialization pattern:
 _twilio_client = None

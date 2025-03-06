@@ -6,6 +6,7 @@ import logging
 import json
 import openai
 import time as time_module
+from utils.llm_utils import chat_completion, parse_json_response
 
 logger = logging.getLogger(__name__)
 
@@ -87,18 +88,30 @@ class IntentClassifier:
             """
             
             start_time = time_module.time()
-            response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
+            
+            # Use the centralized LLM utility
+            response_text = chat_completion(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message}
                 ],
-                response_format={"type": "json_object"},
-                temperature=0.1
+                model="gpt-4o-mini",
+                temperature=0.1,
+                response_format={"type": "json_object"}
             )
+            
             elapsed_time = time_module.time() - start_time
             
-            result = json.loads(response.choices[0].message.content)
+            if not response_text:
+                logger.error("Failed to get response from LLM")
+                return self._detect_reminder_intent_keywords(message)
+            
+            # Parse the JSON response
+            result = parse_json_response(response_text)
+            if not result:
+                logger.error("Failed to parse LLM response as JSON")
+                return self._detect_reminder_intent_keywords(message)
+            
             logger.info(f"LLM intent detection result: {result} (took {elapsed_time:.2f}s)")
             
             is_reminder = result.get("is_reminder", False)

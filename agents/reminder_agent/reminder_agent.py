@@ -10,6 +10,7 @@ from agents.reminder_agent.reminder_db import (
     format_reminder_list_by_time, format_created_reminders,
     format_datetime, BRAZIL_TIMEZONE
 )
+from utils.llm_utils import get_openai_client, chat_completion, parse_json_response
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -23,36 +24,15 @@ class ReminderAgent:
         Args:
             send_message_func: Function to send messages to users
             intent_classifier: Intent classifier instance
-            api_key: OpenAI API key
+            api_key: OpenAI API key (deprecated, kept for backward compatibility)
         """
         self.timezone = pytz.timezone('America/Sao_Paulo')
         self.send_message_func = send_message_func
         self.intent_classifier = intent_classifier
         
-        # Initialize client only if API key is available
-        self.client = None
-        
-        # Use provided API key first, then try environment
-        api_key = api_key or os.getenv("OPENAI_API_KEY")
-        
-        if api_key:
-            try:
-                # Try to import OpenAI, install if not available
-                try:
-                    from openai import OpenAI
-                except ImportError:
-                    import subprocess
-                    import sys
-                    logger.info("Installing openai package...")
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "openai"])
-                    from openai import OpenAI
-                
-                self.client = OpenAI(api_key=api_key)
-                logger.info("OpenAI client initialized successfully")
-            except Exception as e:
-                logger.error(f"Error initializing OpenAI client: {str(e)}.")
-        else:
-            logger.error("No OpenAI API key found. Cannot parse reminder without LLM.")
+        # Check if OpenAI client is available
+        if not get_openai_client():
+            logger.error("No OpenAI client available. Cannot parse reminder without LLM.")
             raise ValueError("OpenAI client is not available. Cannot parse reminder without LLM.")
     
     def handle_reminder_intent(self, user_phone, message_text):
@@ -605,10 +585,10 @@ class ReminderAgent:
         
         
         # Use LLM-based parsing if available
-        if self.client:
+        if get_openai_client():
             try:
                 logger.info("Attempting to parse with LLM")
-                llm_result = self._parse_with_llm(message, current_time)
+                llm_result = self.parse_reminder_with_llm(message, current_time)
                 logger.info(f"LLM parsing result: {llm_result}")
                 
                 # Process the result to ensure it has the expected format
@@ -629,8 +609,8 @@ class ReminderAgent:
             logger.error("No OpenAI client available")
             raise ValueError("OpenAI client is not available. Cannot parse reminder without LLM.")
     
-    def _parse_with_llm(self, message, current_time):
-        """Parse a reminder message using OpenAI LLM"""
+    def parse_reminder_with_llm(self, message, current_time):
+        """Parse a reminder message using LLM to extract title and time"""
         prompt = f"""
         Current time: {current_time.isoformat()}
         Request: "{message}"
@@ -707,56 +687,25 @@ class ReminderAgent:
         logger.info(f"Preparing LLM prompt with current_time: {current_time.isoformat()}")
         logger.info("Sending request to OpenAI API")
         
-        # Make the API call
-        response = self.client.chat.completions.create(
-            model="gpt-3.5-turbo",
+        # Make the API call using the utility function
+        result = chat_completion(
             messages=[
                 {"role": "system", "content": "You are a specialized reminder parsing assistant for Portuguese language. Your job is to extract reminder titles and times from natural language requests with perfect accuracy. You must ALWAYS include both title and parsed_time for every reminder. When Friday is mentioned, always use the correct date for the coming Friday."},
                 {"role": "user", "content": prompt}
             ],
-            response_format={"type": "json_object"},
-            temperature=0.1
+            model="gpt-3.5-turbo",
+            temperature=0.1,
+            response_format={"type": "json_object"}
         )
         
-        # Parse the response
-        result = response.choices[0].message.content
+        if not result:
+            raise ValueError("Failed to get response from LLM")
+        
         logger.info(f"Raw LLM response: {result}")
         
-        try:
-            parsed_data = json.loads(result)
-            logger.info(f"Parsed LLM response: {parsed_data}")
-            
-            # Check if the response contains a reminders array for multiple reminders
-            if "reminders" in parsed_data:
-                # We have multiple reminders, validate each one
-                for i, reminder in enumerate(parsed_data["reminders"]):
-                    # Validate required fields
-                    if "title" not in reminder or not reminder["title"]:
-                        error_msg = f"Reminder {i+1} missing title field in LLM response"
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                    
-                    if "parsed_time" not in reminder or not reminder["parsed_time"]:
-                        error_msg = f"Reminder {i+1} missing parsed_time field in LLM response"
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                
-                return parsed_data
-            else:
-                # Single reminder case
-                # Validate required fields
-                if "title" not in parsed_data or not parsed_data["title"]:
-                    error_msg = "Missing title field in LLM response"
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                
-                if "parsed_time" not in parsed_data or not parsed_data["parsed_time"]:
-                    error_msg = "Missing parsed_time field in LLM response"
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                
-                return parsed_data
-                
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response as JSON: {str(e)}")
-            raise ValueError(f"Failed to parse LLM response as JSON: {str(e)}")
+        # Parse the response
+        parsed_data = parse_json_response(result)
+        if not parsed_data:
+            raise ValueError("Failed to parse LLM response as JSON")
+        
+        return parsed_data

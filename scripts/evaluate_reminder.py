@@ -10,6 +10,7 @@ import builtins
 import time
 import copy
 import webbrowser
+from utils.llm_utils import initialize_openai, chat_completion, parse_json_response
 
 # Import your reminder agent
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -477,22 +478,19 @@ def compare_with_llm(expected, actual, match_details, all_match):
         }}
         """
         
-        # Create OpenAI client
-        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        
-        # Call LLM API
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+        # Use the centralized chat_completion function
+        response_text = chat_completion(
             messages=[
                 {"role": "system", "content": "You are an evaluation assistant for reminder parsing systems. Provide responses in JSON format."},
                 {"role": "user", "content": prompt}
             ],
-            response_format={"type": "json_object"},
-            temperature=0.1
+            model="gpt-3.5-turbo",
+            temperature=0.1,
+            response_format={"type": "json_object"}
         )
         
         # Parse response
-        result = json.loads(response.choices[0].message.content)
+        result = parse_json_response(response_text) or {}
         
         # Override with our own calculation to ensure strictness
         result["passed"] = all_match
@@ -511,6 +509,9 @@ def compare_with_llm(expected, actual, match_details, all_match):
         }
 
 def main():
+    # Initialize OpenAI at the start of the script
+    initialize_openai()
+    
     """Run the evaluation"""
     parser = argparse.ArgumentParser(description='Evaluate reminder agent on test cases')
     parser.add_argument('--test-cases', default='agents/reminder_agent/reminder_test_dataset.json',

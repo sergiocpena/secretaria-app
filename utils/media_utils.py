@@ -5,8 +5,8 @@ This file provides functions for processing different types of media using AI.
 import logging
 import os
 import base64
-import openai
 from utils.whatsapp_utils import download_media
+from utils.llm_utils import chat_completion, get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,8 @@ def process_image(image_url):
         # Convert to base64 for OpenAI API
         image_base64 = base64.b64encode(image_data).decode('utf-8')
         
-        response = openai.ChatCompletion.create(
-            model="gpt-4o",
+        # Use the centralized chat_completion function
+        response = chat_completion(
             messages=[
                 {
                     "role": "system",
@@ -76,7 +76,7 @@ def process_image(image_url):
 - Ensure clarity and engagement in your analysis, making it accessible to a broad audience."""
                 },
                 {
-                    "role": "user",
+                    "role": "user", 
                     "content": [
                         {"type": "text", "text": "What's in this image?"},
                         {
@@ -88,49 +88,49 @@ def process_image(image_url):
                     ]
                 }
             ],
-            max_tokens=300
+            model="gpt-4o",
+            temperature=0.7
         )
         
-        return response.choices[0].message.content.strip()
+        return response
     except Exception as e:
         logger.error(f"Error processing image: {str(e)}")
         return "Desculpe, não consegui analisar esta imagem."
 
 def transcribe_audio(audio_url):
-    """Transcribe an audio message using OpenAI's Whisper API"""
+    """Transcribe an audio file using OpenAI's Whisper API"""
     try:
         logger.info(f"Transcribing audio: {audio_url}")
         
-        # Download the audio
+        # Download the audio file
         audio_data = download_media(audio_url)
         if not audio_data:
             raise Exception("Failed to download audio")
         
         # Save to a temporary file
         import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg') as temp_file:
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
             temp_file.write(audio_data)
             temp_file_path = temp_file.name
         
-        try:
-            # Transcribe using OpenAI's Whisper API
-            with open(temp_file_path, "rb") as audio_file:
-                transcript = openai.Audio.transcribe(
-                    model="whisper-1",
-                    file=audio_file,
-                    language="pt"
-                )
-            
-            transcribed_text = transcript.get('text', '')
-            logger.info(f"Transcription result: {transcribed_text[:50]}...")
-            
-            return transcribed_text
-        finally:
-            # Clean up the temporary file
-            import os
-            if os.path.exists(temp_file_path):
-                os.unlink(temp_file_path)
-                
+        # Use the OpenAI client from our utilities
+        client = get_openai_client()
+        
+        if not client:
+            raise Exception("OpenAI client not available")
+        
+        # Open the file and transcribe
+        with open(temp_file_path, 'rb') as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="pt"
+            )
+        
+        # Clean up the temporary file
+        os.unlink(temp_file_path)
+        
+        return transcription.text
     except Exception as e:
         logger.error(f"Error transcribing audio: {str(e)}")
         return "Desculpe, não consegui transcrever este áudio." 

@@ -12,7 +12,7 @@ from utils.llm_utils import chat_completion
 
 logger = logging.getLogger(__name__)
 
-def get_ai_response(user_message, conversation_history=None, system_prompt=None):
+def get_ai_response(user_message, conversation_history=None, system_prompt=None, is_audio_transcription=False):
     """Get a response from the AI model"""
     # Build the messages array
     messages = []
@@ -45,8 +45,11 @@ def handle_message(from_number, message_body, message_type='text'):
         # Store the incoming message
         store_conversation(from_number, message_body, message_type, True)
         
+        # Get conversation history for context
+        conversation_history = get_conversation_context(from_number)
+        
         # Get AI response for general conversation
-        response = get_ai_response(message_body, is_audio_transcription=(message_type == 'audio'))
+        response = get_ai_response(message_body, conversation_history, is_audio_transcription=(message_type == 'audio'))
         
         # Store the response
         store_conversation(from_number, response, 'text', False)

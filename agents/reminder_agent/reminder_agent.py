@@ -607,11 +607,15 @@ class ReminderAgent:
             
         Returns:
             dict: The parsed reminder with title and scheduled_time
-            
-        Raises:
-            ValueError: If parsing fails or required data is missing
-            Exception: If any other error occurs during parsing
         """
+        # Import required modules
+        import re
+        import os
+        import json
+        from datetime import datetime, timedelta
+        from dateutil import parser
+        from openai import OpenAI
+        
         self.logger.info(f"STARTING parse_reminder with message: {message[:50]}...")
         
         # Extract current time context if provided
@@ -641,73 +645,31 @@ class ReminderAgent:
                     
                 self.logger.info(f"Parsed current time: {current_time}")
             except Exception as e:
-                error_msg = f"Failed to parse current time: {e}"
-                self.logger.error(error_msg)
-                raise ValueError(error_msg)
-        
-        # Attempt to parse the reminder with LLM
-        self.logger.info("Attempting to parse with LLM")
-        try:
-            result = self._parse_with_llm_iso(message, current_time)
-            self.logger.info(f"Raw LLM result: {result}")
-            
-            if not result:
-                error_msg = "LLM returned empty or None result"
-                self.logger.error(error_msg)
-                raise ValueError(error_msg)
-        except Exception as e:
-            error_msg = f"Error in _parse_with_llm: {e}"
-            self.logger.error(error_msg)
-            raise
-        
-        # Handle multiple reminders case
-        if 'reminders' in result and isinstance(result['reminders'], list) and result['reminders']:
-            self.logger.info(f"Found multiple reminders: {len(result['reminders'])} reminders")
-            # Validate each reminder in the array
-            for i, reminder in enumerate(result['reminders']):
-                if 'title' not in reminder or not reminder.get('title'):
-                    error_msg = f"Reminder {i} missing title"
-                    self.logger.error(error_msg)
-                    raise ValueError(error_msg)
-                    
-                if 'scheduled_time' not in reminder or not reminder.get('scheduled_time'):
-                    error_msg = f"Reminder {i} missing scheduled_time"
-                    self.logger.error(error_msg)
-                    raise ValueError(error_msg)
-            
-            # All reminders are valid, return the result
-            return result
+                self.logger.error(f"Failed to parse current time: {e}")
+                # Default to now
+                current_time = datetime.now(BRAZIL_TZ)
         else:
-            # Handle single reminder case
-            try:
-                # Validate the response structure for a single reminder
-                if 'title' not in result or not result.get('title'):
-                    error_msg = "Response missing title"
-                    self.logger.error(error_msg)
-                    raise ValueError(error_msg)
-                    
-                if 'scheduled_time' not in result or not result.get('scheduled_time'):
-                    error_msg = "Response missing scheduled_time"
-                    self.logger.error(error_msg)
-                    raise ValueError(error_msg)
-                
-                self.logger.info(f"Final LLM result: {result}")
-                return result
-            except Exception as e:
-                error_msg = f"Unexpected error in parse_reminder: {e}"
-                self.logger.error(error_msg)
-                raise
-
-    def _parse_with_llm_iso(self, message, current_time=None):
-        """Call the LLM to parse reminder details with ISO timestamp output"""
-        # Current time context for the LLM
-        time_context = ""
-        if current_time:
-            time_context = f"Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S %z')}"
+            # Default to now
+            current_time = datetime.now(BRAZIL_TZ)
         
-        system_prompt = f"""You are a helpful AI assistant specialized in parsing reminder text into structured data.
+        # Attempt to parse the reminder with direct OpenAI call
+        self.logger.info("Attempting to parse with direct OpenAI API call")
+        try:        
+            # Get API key
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY environment variable not set")
+            
+            # Create client
+            client = OpenAI(api_key=api_key)
+            
+            # Prepare system prompt
+            system_prompt = f"""You are a helpful AI assistant specialized in parsing reminder text into structured data.
 Extract the reminder title and time information from the user's message.
-{time_context}
+
+Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S %z')}
+Current year: {current_time.year}
+Tomorrow's date: {(current_time + timedelta(days=1)).strftime('%Y-%m-%d')}
 
 Your response should follow this format:
 {{
@@ -717,61 +679,109 @@ Your response should follow this format:
 
 If there are multiple reminders, include them in a "reminders" array using the same format.
 Always convert human-readable time expressions to proper ISO timestamps.
+Never generate dates in the past.
 """
-        
-        try:
-            # Import and use OpenAI directly to avoid passing client objects
-            from openai import OpenAI
-            from os import getenv
             
-            # Create client with API key from environment
-            client = OpenAI(api_key=getenv("OPENAI_API_KEY"))
-            
+            # Prepare messages
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message}
             ]
             
-            self.logger.info(f"Sending request to OpenAI with message length: {len(message)}")
-            
-            # Call the OpenAI API directly
+            # Make the direct API call
+            self.logger.info("Making direct OpenAI API call")
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=messages,
                 temperature=0
             )
             
-            # Extract and process the response
-            if not response or not response.choices or not response.choices[0].message.content:
-                self.logger.error("Empty response from OpenAI API")
-                return None
+            # Process the response
+            if response and response.choices and response.choices[0].message.content:
+                content = response.choices[0].message.content
+                self.logger.info(f"Raw response from OpenAI: {content}")
+                
+                # Parse JSON
+                try:
+                    parsed_data = json.loads(content)
+                    self.logger.info(f"Parsed JSON data: {parsed_data}")
+                    
+                    # Validate the data
+                    if "title" not in parsed_data:
+                        self.logger.warning("Missing 'title' in parsed data")
+                        parsed_data["title"] = "Lembrete"
+                    
+                    if "scheduled_time" not in parsed_data:
+                        self.logger.warning("Missing 'scheduled_time' in parsed data")
+                        # Default to tomorrow at noon
+                        tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+                        parsed_data["scheduled_time"] = tomorrow_noon.isoformat()
+                    else:
+                        # Validate the scheduled time is not in the past
+                        try:
+                            scheduled_time = datetime.fromisoformat(parsed_data["scheduled_time"])
+                            if scheduled_time < current_time:
+                                self.logger.warning(f"Scheduled time {scheduled_time} is in the past, adjusting to tomorrow")
+                                tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+                                parsed_data["scheduled_time"] = tomorrow_noon.isoformat()
+                        except (ValueError, TypeError):
+                            self.logger.warning(f"Could not parse scheduled_time: {parsed_data['scheduled_time']}")
+                            tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+                            parsed_data["scheduled_time"] = tomorrow_noon.isoformat()
+                    
+                    # Also check reminders array if present
+                    if "reminders" in parsed_data and isinstance(parsed_data["reminders"], list):
+                        for i, reminder in enumerate(parsed_data["reminders"]):
+                            if "title" not in reminder:
+                                reminder["title"] = f"Lembrete {i+1}"
+                            
+                            if "scheduled_time" not in reminder:
+                                tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+                                reminder["scheduled_time"] = tomorrow_noon.isoformat()
+                            else:
+                                # Validate the scheduled time is not in the past
+                                try:
+                                    scheduled_time = datetime.fromisoformat(reminder["scheduled_time"])
+                                    if scheduled_time < current_time:
+                                        self.logger.warning(f"Reminder {i} scheduled time {scheduled_time} is in the past, adjusting to tomorrow")
+                                        tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+                                        reminder["scheduled_time"] = tomorrow_noon.isoformat()
+                                except (ValueError, TypeError):
+                                    self.logger.warning(f"Could not parse reminder {i} scheduled_time: {reminder['scheduled_time']}")
+                                    tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+                                    reminder["scheduled_time"] = tomorrow_noon.isoformat()
+                    
+                    return parsed_data
+                except json.JSONDecodeError:
+                    # Try to extract JSON with regex if the response isn't pure JSON
+                    json_match = re.search(r'({.*})', content, re.DOTALL)
+                    if json_match:
+                        try:
+                            extracted_json = json_match.group(1)
+                            parsed_data = json.loads(extracted_json)
+                            self.logger.info(f"Extracted JSON from text: {parsed_data}")
+                            return parsed_data
+                        except json.JSONDecodeError:
+                            self.logger.error("Failed to parse extracted JSON")
             
-            # Get the actual content from the response
-            content = response.choices[0].message.content
-            self.logger.info(f"Raw response from LLM: {content}")
-            
-            # Parse the JSON string into a Python dictionary
-            try:
-                parsed_data = json.loads(content)
-                self.logger.info(f"Parsed JSON from LLM: {parsed_data}")
-                return parsed_data
-            except json.JSONDecodeError as je:
-                self.logger.error(f"Failed to parse LLM response as JSON: {je}")
-                # Try using regex to extract JSON data if response isn't pure JSON
-                import re
-                json_match = re.search(r'({.*})', content, re.DOTALL)
-                if json_match:
-                    try:
-                        extracted_json = json_match.group(1)
-                        parsed_data = json.loads(extracted_json)
-                        self.logger.info(f"Extracted JSON from text: {parsed_data}")
-                        return parsed_data
-                    except json.JSONDecodeError:
-                        self.logger.error(f"Failed to parse extracted JSON")
-                return None
+            # If we got here, something went wrong
+            raise ValueError("Failed to get valid response from OpenAI API")
         except Exception as e:
-            self.logger.error(f"Error in _parse_with_llm_iso: {str(e)}", exc_info=True)
-            return None
+            self.logger.error(f"Error in parse_reminder: {str(e)}", exc_info=True)
+            # Create a basic structure with a default reminder for tomorrow
+            tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+            
+            # Try to extract a meaningful title from the message
+            title_match = re.search(r'(?:me\s+lembra\s+de|lembrar\s+de)\s+(.*?)(?:\s+(?:em|daqui|amanhã|hoje|às|as|\d+\s*min|\d+\s*hora|pela|no|na|ao|às|as))?(?=$|\s)', message.lower(), re.IGNORECASE)
+            
+            title = "Lembrete"
+            if title_match:
+                title = title_match.group(1).strip()
+            
+            return {
+                "title": title,
+                "scheduled_time": tomorrow_noon.isoformat()
+            }
 
 class TimeAwareReminderAgent(ReminderAgent):
     """

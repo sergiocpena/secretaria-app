@@ -334,6 +334,7 @@ def evaluate_test_case(agent, test_case, case_number=None):
     
     return {
         'message': message,
+        'current_time': datetime_str,  # Include current_time for the report
         'expected': expected_result,
         'actual': formatted_result,
         'success': success,
@@ -464,6 +465,12 @@ def generate_html_report(results):
         error = result.get('error', '')
         explanation = result.get('explanation', '')
         
+        # Create input object with message and current_time
+        input_obj = {
+            "message": message,
+            "current_time": result.get('current_time', None)  # Add current_time if available
+        }
+        
         # Prepare data for display
         expected_display = expected.copy() if expected else {}
         actual_display = actual.copy() if actual else {}
@@ -478,6 +485,7 @@ def generate_html_report(results):
                 actual_display['scheduled_time_str'] = actual_display['scheduled_time'].isoformat()
         
         # Convert to JSON string for display, handling datetime objects
+        input_raw = json.dumps(input_obj, indent=2, default=json_serializable)
         expected_raw = json.dumps(expected_display, indent=2, default=json_serializable) if expected_display else "Not available"
         actual_raw = json.dumps(actual_display, indent=2, default=json_serializable) if actual_display else "Not available"
         
@@ -485,7 +493,7 @@ def generate_html_report(results):
         row = f"""
         <tr class="{'success' if success else 'failure'}">
             <td>{idx + 1}</td>
-            <td><pre>{message}</pre></td>
+            <td><pre>{input_raw}</pre></td>
             <td><pre>{expected_raw}</pre></td>
             <td><pre>{actual_raw}</pre></td>
             <td>{explanation}</td>
@@ -504,7 +512,10 @@ def generate_html_report(results):
     num_results = len(valid_results)
     num_passed = sum(1 for r in valid_results if r.get('success', False))
     
-    # Create HTML with improved styling for table fit
+    # Get current execution time
+    execution_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Create HTML with improved styling for table fit and more concise summary
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -520,6 +531,19 @@ def generate_html_report(results):
                 color: #2c3e50;
                 border-bottom: 2px solid #eee;
                 padding-bottom: 10px;
+            }}
+            .summary {{
+                background-color: #f8f9fa;
+                border-left: 4px solid #5bc0de;
+                padding: 10px 15px;
+                margin-bottom: 20px;
+                display: flex;
+                justify-content: space-between;
+                flex-wrap: wrap;
+            }}
+            .summary-item {{
+                margin-right: 20px;
+                margin-bottom: 5px;
             }}
             table {{
                 width: 100%;
@@ -540,19 +564,13 @@ def generate_html_report(results):
                 font-weight: bold;
             }}
             th:nth-child(1) {{ width: 3%; }} /* # column */
-            th:nth-child(2) {{ width: 20%; }} /* Message column */
+            th:nth-child(2) {{ width: 20%; }} /* Inputs column */
             th:nth-child(3) {{ width: 20%; }} /* Expected column */
             th:nth-child(4) {{ width: 20%; }} /* Actual column */
             th:nth-child(5) {{ width: 20%; }} /* Explanation column */
             th:nth-child(6) {{ width: 7%; }} /* Result column */
             th:nth-child(7) {{ width: 10%; }} /* Error column */
             
-            .summary {{
-                background-color: #f8f9fa;
-                border-left: 4px solid #5bc0de;
-                padding: 15px;
-                margin-bottom: 20px;
-            }}
             .success td {{
                 background-color: #f0fff0;
             }}
@@ -586,17 +604,15 @@ def generate_html_report(results):
     <body>
         <h1>Reminder Agent Evaluation Results</h1>
         <div class="summary">
-            <h2>Summary</h2>
-            <p>Total test cases: {num_results}</p>
-            <p>Passed: {num_passed}</p>
-            <p>Failed: {num_results - num_passed}</p>
-            <p>Success rate: {(num_passed / num_results * 100) if num_results > 0 else 0:.2f}%</p>
+            <div class="summary-item"><strong>Tests:</strong> {num_results} total, {num_passed} passed, {num_results - num_passed} failed</div>
+            <div class="summary-item"><strong>Success rate:</strong> {(num_passed / num_results * 100) if num_results > 0 else 0:.2f}%</div>
+            <div class="summary-item"><strong>Execution time:</strong> {execution_time}</div>
         </div>
         <table>
             <thead>
                 <tr>
                     <th>#</th>
-                    <th>Message</th>
+                    <th>Inputs</th>
                     <th>Expected</th>
                     <th>Actual</th>
                     <th>Explanation</th>

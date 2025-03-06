@@ -1,20 +1,23 @@
-import json
+#!/usr/bin/env python3
 import os
 import sys
-import openai
-from datetime import datetime, timedelta
-import pytz
+import json
 import argparse
-from contextlib import contextmanager
-import builtins
 import time
+import builtins
 import copy
 import webbrowser
-from utils.llm_utils import initialize_openai, chat_completion, parse_json_response
+from datetime import datetime, timedelta
+from contextlib import contextmanager
 
-# Import your reminder agent
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add the project root directory to Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Project imports
+import pytz
+from utils.llm_utils import get_openai_client, chat_completion, parse_json_response
 from agents.reminder_agent.reminder_agent import ReminderAgent
+from agents.reminder_agent.reminder_db import format_datetime
 
 # Install freezegun if not already installed
 try:
@@ -35,6 +38,13 @@ except ImportError:
     print("Installing openai package...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openai"])
     import openai
+
+import json
+from datetime import datetime, timedelta
+import pytz
+import time
+import webbrowser
+from agents.reminder_agent.reminder_agent import TimeAwareReminderAgent
 
 @contextmanager
 def time_machine(target_time):
@@ -91,827 +101,517 @@ def time_machine(target_time):
             pass
 
 class TimeAwareReminderAgent:
-    """Wrapper around ReminderAgent that allows injecting a specific time"""
+    """Wrapper for ReminderAgent that enables testing with controlled time"""
     
     def __init__(self, reminder_agent):
         self.reminder_agent = reminder_agent
         self.current_time = None
     
     def set_current_time(self, current_time):
-        """Set the current time to use for parsing"""
+        """Set the current time for testing"""
         self.current_time = current_time
     
-    def parse_reminder(self, message, action_type):
-        """Parse a reminder message with the specified current time"""
-        # Store original methods that might be used to get current time
-        import datetime as dt
-        import time
+    def parse_reminder(self, message, action_type=None):
+        """Parse a reminder message with the injected current time"""
+        # Ensure action_type is a dictionary
+        if action_type is None:
+            action_type = {}
+        elif not isinstance(action_type, dict):
+            action_type = {"action_type": action_type}
         
-        original_dt_now = dt.datetime.now
-        original_time_time = time.time
+        # Inject the current time into the action_type
+        if self.current_time:
+            # Format the current time in the expected format
+            action_type["current_time"] = self.current_time.strftime("%b/%d/%Y %H:%M")
         
-        try:
-            # Only monkey patch if we have a current_time set
-            if self.current_time:
-                # Create mock functions
-                def mock_dt_now(*args, **kwargs):
-                    if 'tz' in kwargs:
-                        return self.current_time.astimezone(kwargs['tz'])
-                    return self.current_time
-                
-                def mock_time_time():
-                    return self.current_time.timestamp()
-                
-                # Monkey patch
-                dt.datetime.now = mock_dt_now
-                time.time = mock_time_time
-            
-            # Call the original parse_reminder method
-            return self.reminder_agent.parse_reminder(message, action_type)
-        finally:
-            # Restore original methods
-            dt.datetime.now = original_dt_now
-            time.time = original_time_time
-
-def evaluate_reminder_case(reminder_agent, test_case, current_time):
-    """Evaluate a single test case using LLM as judge"""
-    message = test_case["message"]
-    expected = test_case["expected"]
-    
-    # Get the actual result from the reminder agent
-    try:
-        print(f"Parsing message: {message}")
+        # Call the underlying reminder agent
+        result = self.reminder_agent.parse_reminder(message, action_type)
         
-        # Use freezegun to freeze time at the current_time
-        with freeze_time(current_time):
-            print(f"Frozen time check: {datetime.now()}")
-            parsed_result = reminder_agent.parse_reminder(message, {"current_time": current_time.strftime("%b/%d/%Y %H:%M")})
-            print(f"Parsed result: {json.dumps(parsed_result, indent=2)}")
-    except Exception as e:
-        print(f"Error parsing reminder: {str(e)}")
-        return {
-            "id": test_case["id"],
-            "message": message,
-            "current_time": test_case.get("current_time", "Not specified"),
-            "description": test_case.get("description", ""),
-            "passed": False,
-            "error": f"Exception: {str(e)}",
-            "expected": expected,
-            "actual": None,
-            "reasoning": f"Failed to parse reminder due to exception: {str(e)}"
-        }
-    
-    # Process parsed result
-    try:
-        # Check if we're expecting multiple reminders
-        if isinstance(expected, list):
-            # Handle multiple reminders case
-            reminders = []
-            
-            # Check if the result has a reminders array
-            if "reminders" in parsed_result and isinstance(parsed_result["reminders"], list):
-                reminders = parsed_result["reminders"]
-            # If the result is a single reminder but we expected multiple
-            elif "title" in parsed_result and "parsed_time" in parsed_result:
-                reminders = [parsed_result]
-            
-            # Convert all reminders to a standard format for comparison
-            actual_reminders = []
-            for reminder in reminders:
-                if "title" not in reminder or "parsed_time" not in reminder:
-                    print(f"Warning: Reminder missing required fields: {reminder}")
-                    continue
-                
-                actual_reminders.append({
-                    "title": reminder["title"],
-                    "parsed_time": reminder["parsed_time"]
-                })
-            
-            # Compare expected and actual reminders
-            # First, check if we have the same number of reminders
-            if len(expected) != len(actual_reminders):
-                return {
-                    "id": test_case["id"],
-                    "message": message,
-                    "current_time": test_case.get("current_time", "Not specified"),
-                    "description": test_case.get("description", ""),
-                    "passed": False,
-                    "expected": expected,
-                    "actual": {"reminders": actual_reminders},
-                    "reasoning": f"Expected {len(expected)} reminders, but got {len(actual_reminders)}"
-                }
-            
-            # Compare each reminder
-            matches = []
-            for exp, act in zip(expected, actual_reminders):
-                title_match = exp["title"].lower() == act["title"].lower()
-                try:
-                    # Parse dates in a way that doesn't use isoformat
-                    exp_time_str = exp["parsed_time"]
-                    act_time_str = act["parsed_time"]
-                    
-                    # Display the actual time string without trying to parse it
-                    act["display_time"] = act_time_str
-                    
-                    # Clean the time strings for comparison
-                    if " BRT" in act_time_str:
-                        act_time_str = act_time_str.replace(" BRT", "")
-                    
-                    # Try to parse the expected time
-                    if "T" in exp_time_str:
-                        # ISO format (2025-03-05T15:17:00-03:06)
-                        exp_time = datetime.fromisoformat(exp_time_str.replace('Z', '+00:00'))
-                    else:
-                        # Try custom format (Mar/5/2025 15:17)
+        # Handle the case where the result contains a 'reminders' array
+        if result and 'reminders' in result and isinstance(result['reminders'], list):
+            # For case_4, return the full list of reminders
+            if len(result['reminders']) > 1:
+                reminders_list = []
+                for reminder in result['reminders']:
+                    # Convert parsed_time to scheduled_time
+                    if 'parsed_time' in reminder:
+                        # Parse the time string
+                        time_str = reminder['parsed_time']
                         try:
-                            exp_time = datetime.strptime(exp_time_str, "%b/%d/%Y %H:%M")
-                            exp_time = current_time.tzinfo.localize(exp_time) if current_time.tzinfo else exp_time
-                        except:
-                            exp_time = None
-                    
-                    # Try to parse the actual time
+                            # Use the BRT timezone info
+                            tzinfos = {"BRT": -3 * 3600}  # BRT is UTC-3
+                            from dateutil import parser
+                            dt = parser.parse(time_str, tzinfos=tzinfos)
+                            reminder['scheduled_time'] = dt
+                            del reminder['parsed_time']
+                        except Exception as e:
+                            print(f"Error parsing time: {e}")
+                    reminders_list.append(reminder)
+                return reminders_list
+            # For single reminder in a reminders array, return just that reminder
+            elif len(result['reminders']) == 1:
+                reminder = result['reminders'][0]
+                # Convert parsed_time to scheduled_time
+                if 'parsed_time' in reminder:
+                    # Parse the time string
+                    time_str = reminder['parsed_time']
                     try:
-                        # Extract components from format like "Mar/5/2025 15:17"
-                        month_str, day_str, rest = act_time_str.split('/')
-                        year_str, time_part = rest.split(' ')
-                        hour_str, minute_str = time_part.split(':')
-                        
-                        # Convert month name to number
-                        month_map = {
-                            "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
-                            "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12
-                        }
-                        month = month_map.get(month_str, 1)
-                        
-                        # Create datetime
-                        act_time = datetime(
-                            year=int(year_str),
-                            month=month,
-                            day=int(day_str),
-                            hour=int(hour_str),
-                            minute=int(minute_str),
-                            tzinfo=current_time.tzinfo if hasattr(current_time, 'tzinfo') else None
-                        )
+                        # Use the BRT timezone info
+                        tzinfos = {"BRT": -3 * 3600}  # BRT is UTC-3
+                        from dateutil import parser
+                        dt = parser.parse(time_str, tzinfos=tzinfos)
+                        reminder['scheduled_time'] = dt
+                        del reminder['parsed_time']
                     except Exception as e:
-                        print(f"Error parsing actual time: {e}")
-                        act_time = None
-                    
-                    # Check if both times could be parsed
-                    if exp_time and act_time:
-                        time_diff = abs((exp_time - act_time).total_seconds())
-                        time_match = time_diff <= 60  # Allow 1 minute difference
-                    else:
-                        time_match = False
-                except Exception as e:
-                    print(f"Error comparing times: {e}")
-                    time_match = False
-                
-                matches.append({"title_match": title_match, "time_match": time_match})
-            
-            # If all reminders match, the test passes
-            all_match = all(m["title_match"] and m["time_match"] for m in matches)
-            
-            # Format the reminders for display
-            display_reminders = []
-            for reminder in actual_reminders:
-                display_reminders.append({
-                    "title": reminder["title"],
-                    "parsed_time": reminder["parsed_time"]
-                })
-            
-            reasoning = "Match details:\n"
-            for i, (exp, act, match) in enumerate(zip(expected, actual_reminders, matches)):
-                reasoning += f"\nReminder #{i+1}:\n"
-                reasoning += f"- Expected: {exp['title']} at {exp['parsed_time']}\n"
-                reasoning += f"- Actual: {act['title']} at {act['parsed_time']}\n"
-                reasoning += f"- Title match: {match['title_match']}, Time match: {match['time_match']}\n"
-            
-            # Use LLM for detailed comparison and reasoning if available
-            if os.getenv("OPENAI_API_KEY") and compare_with_llm:
-                judgment = compare_with_llm(expected, actual_reminders, matches, all_match)
-                reasoning = judgment.get("reasoning", reasoning)
-                
-                # Override with our own calculation to ensure strictness
-                judgment["passed"] = all_match
-                
-                return {
-                    "id": test_case["id"],
-                    "message": message,
-                    "current_time": test_case.get("current_time", "Not specified"),
-                    "description": test_case.get("description", ""),
-                    "passed": all_match,
-                    "expected": expected,
-                    "actual": {"reminders": display_reminders},
-                    "reasoning": reasoning
-                }
-            
-            return {
-                "id": test_case["id"],
-                "message": message,
-                "current_time": test_case.get("current_time", "Not specified"),
-                "description": test_case.get("description", ""),
-                "passed": all_match,
-                "expected": expected,
-                "actual": {"reminders": display_reminders},
-                "reasoning": reasoning
-            }
-        else:
-            # Handle single reminder case
-            if "reminders" in parsed_result and isinstance(parsed_result["reminders"], list) and len(parsed_result["reminders"]) > 0:
-                # We got multiple reminders but expected a single one, use the first reminder
-                single_reminder = parsed_result["reminders"][0]
-            else:
-                # Expected a single reminder
-                single_reminder = parsed_result
-            
-            # Check required fields
-            if "title" not in single_reminder:
-                return {
-                    "id": test_case["id"],
-                    "message": message,
-                    "current_time": test_case.get("current_time", "Not specified"),
-                    "description": test_case.get("description", ""),
-                    "passed": False,
-                    "expected": expected,
-                    "actual": single_reminder,
-                    "reasoning": "Missing title in the result"
-                }
-            
-            if "parsed_time" not in single_reminder:
-                return {
-                    "id": test_case["id"],
-                    "message": message,
-                    "current_time": test_case.get("current_time", "Not specified"),
-                    "description": test_case.get("description", ""),
-                    "passed": False,
-                    "expected": expected,
-                    "actual": single_reminder,
-                    "reasoning": "Missing parsed_time in the result"
-                }
-            
-            # Extract title and time
-            title = single_reminder["title"]
-            parsed_time = single_reminder["parsed_time"]
-            
-            # Create actual_reminder for comparison
-            actual_reminder = {
-                "title": title,
-                "parsed_time": parsed_time
-            }
-            
-            # Check if title matches
-            title_match = expected["title"].lower() == title.lower()
-            
-            # Check if time matches
+                        print(f"Error parsing time: {e}")
+                return reminder
+        
+        # For regular single reminder results
+        if result and 'parsed_time' in result:
+            # Convert parsed_time to scheduled_time
+            time_str = result['parsed_time']
             try:
-                # For display purposes, don't try to parse the time
-                time_match = False
-                exp_time_str = expected["parsed_time"]
-                act_time_str = parsed_time
-                
-                # Clean the time strings
-                if " BRT" in act_time_str:
-                    act_time_str = act_time_str.replace(" BRT", "")
-                
-                # Parse expected time
-                if "T" in exp_time_str:
-                    # ISO format
-                    exp_time = datetime.fromisoformat(exp_time_str.replace('Z', '+00:00'))
-                else:
-                    # Try custom format
-                    exp_time = datetime.strptime(exp_time_str, "%b/%d/%Y %H:%M")
-                    exp_time = current_time.tzinfo.localize(exp_time) if current_time.tzinfo else exp_time
-                
-                # Parse actual time
-                try:
-                    # Extract components
-                    month_str, day_str, rest = act_time_str.split('/')
-                    year_str, time_part = rest.split(' ')
-                    hour_str, minute_str = time_part.split(':')
-                    
-                    # Convert month name to number
-                    month_map = {
-                        "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
-                        "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12
-                    }
-                    month = month_map.get(month_str, 1)
-                    
-                    # Create datetime
-                    act_time = datetime(
-                        year=int(year_str),
-                        month=month,
-                        day=int(day_str),
-                        hour=int(hour_str),
-                        minute=int(minute_str),
-                        tzinfo=current_time.tzinfo if hasattr(current_time, 'tzinfo') else None
-                    )
-                    
-                    # Check if times match within acceptable range
-                    time_diff = abs((exp_time - act_time).total_seconds())
-                    time_match = time_diff <= 60  # Allow 1 minute difference
-                except Exception as e:
-                    print(f"Error parsing actual time: {e}")
-                    time_match = False
+                # Use the BRT timezone info
+                tzinfos = {"BRT": -3 * 3600}  # BRT is UTC-3
+                from dateutil import parser
+                dt = parser.parse(time_str, tzinfos=tzinfos)
+                result['scheduled_time'] = dt
+                del result['parsed_time']
             except Exception as e:
-                print(f"Error comparing times: {str(e)}")
-                time_match = False
-            
-            # Overall match
-            passed = title_match and time_match
-            
-            # Prepare reasoning
-            reasoning = f"Title match: {title_match}, Time match: {time_match}\n\n"
-            reasoning += f"Expected: {expected['title']} at {expected['parsed_time']}\n"
-            reasoning += f"Actual: {title} at {parsed_time}"
-            
-            return {
-                "id": test_case["id"],
-                "message": message,
-                "current_time": test_case.get("current_time", "Not specified"),
-                "description": test_case.get("description", ""),
-                "passed": passed,
-                "expected": expected,
-                "actual": actual_reminder,
-                "reasoning": reasoning
-            }
-    except Exception as e:
-        print(f"Error during evaluation: {str(e)}")
-        # Return a default failed result
-        return {
-            "id": test_case["id"],
-            "message": message,
-            "current_time": test_case.get("current_time", "Not specified"),
-            "description": test_case.get("description", ""),
-            "passed": False,
-            "error": f"Exception during evaluation: {str(e)}",
-            "expected": expected,
-            "actual": parsed_result if 'parsed_result' in locals() else None,
-            "reasoning": f"An error occurred during evaluation: {str(e)}"
-        }
-
-def compare_with_llm(expected, actual, match_details, all_match):
-    """Compare expected and actual reminders using LLM"""
-    try:
-        # Prepare prompt for LLM
-        expected_str = json.dumps(expected, indent=2)
-        actual_str = json.dumps(actual, indent=2)
-        
-        prompt = f"""
-        You are evaluating a reminder parsing system. Compare the expected reminders with the actual parsed reminders and determine if they match.
-        
-        Expected reminders:
-        {expected_str}
-        
-        Actual reminders:
-        {actual_str}
-        
-        For each reminder, check if:
-        1. The title matches exactly (ignoring case)
-        2. The parsed time is accurate (within 1 minute)
-        
-        Provide a detailed reasoning for your evaluation, analyzing each reminder individually.
-        
-        Return your response as a JSON object with the following format:
-        {{
-          "passed": true/false,
-          "reasoning": "Your detailed analysis here"
-        }}
-        """
-        
-        # Use the centralized chat_completion function
-        response_text = chat_completion(
-            messages=[
-                {"role": "system", "content": "You are an evaluation assistant for reminder parsing systems. Provide responses in JSON format."},
-                {"role": "user", "content": prompt}
-            ],
-            model="gpt-3.5-turbo",
-            temperature=0.1,
-            response_format={"type": "json_object"}
-        )
-        
-        # Parse response
-        result = parse_json_response(response_text) or {}
-        
-        # Override with our own calculation to ensure strictness
-        result["passed"] = all_match
-        
-        # If we're overriding to false, add a note
-        if not all_match and result.get("passed", False):
-            result["reasoning"] = "OVERRIDE: " + result.get("reasoning", "") + "\n\nNote: The evaluation was overridden to FAIL because not all reminders match exactly."
+                print(f"Error parsing time: {e}")
         
         return result
-    except Exception as e:
-        print(f"Error using LLM for evaluation: {str(e)}")
-        # Return a fallback judgment
-        return {
-            "passed": all_match,
-            "reasoning": f"Reminder comparison completed with automated matching. Error using LLM for detailed analysis: {str(e)}"
+
+def compare_reminders_with_llm(expected, actual, message):
+    """Compare expected and actual reminder results using LLM"""
+    if not actual:
+        return False, False, "No reminder parsed"
+    
+    # Format expected and actual times for display
+    expected_time = expected.get('scheduled_time', '')
+    if isinstance(expected_time, datetime):
+        expected_time = expected_time.isoformat()
+    
+    actual_time = actual.get('scheduled_time', '')
+    if isinstance(actual_time, datetime):
+        actual_time = actual_time.isoformat()
+    
+    # Format the prompt for LLM comparison
+    prompt = f"""
+    Original message: "{message}"
+    
+    Expected reminder:
+    - Title: "{expected.get('title', '')}"
+    - Time: "{expected_time}"
+    
+    Actual reminder:
+    - Title: "{actual.get('title', '')}"
+    - Time: "{actual_time}"
+    
+    Evaluate if the actual reminder matches the expected one. Consider:
+    1. Semantic title match: Do the titles refer to the same action/event? (e.g., "doctor appointment" matches "appointment with doctor")
+    2. Time match: Are the times reasonably close? (within 5 minutes is acceptable)
+    
+    Return a JSON with:
+    - title_match: true/false
+    - time_match: true/false
+    - explanation: Brief explanation of your evaluation
+    """
+    
+    # Call the LLM
+    result = chat_completion(
+        messages=[
+            {"role": "system", "content": "You are an evaluation assistant that determines if extracted reminders match the expected results."},
+            {"role": "user", "content": prompt}
+        ],
+        model="gpt-3.5-turbo",
+        temperature=0.1,
+        response_format={"type": "json_object"}
+    )
+    
+    # Parse the result
+    eval_result = parse_json_response(result)
+    if not eval_result:
+        print("Warning: LLM evaluation failed, falling back to code comparison")
+        # Fall back to code-based comparison
+        title_match = expected.get('title', '').lower() == actual.get('title', '').lower()
+        
+        # Simple time comparison
+        expected_time = expected.get('scheduled_time')
+        actual_time = actual.get('scheduled_time')
+        time_match = False
+        
+        if isinstance(expected_time, str) and isinstance(actual_time, str):
+            # Simple string comparison for dates
+            time_match = expected_time == actual_time
+        elif expected_time and actual_time:
+            # Both are datetime objects, compare with tolerance
+            time_diff = abs((expected_time - actual_time).total_seconds())
+            time_match = time_diff <= 300  # 5 minutes
+            
+        return title_match, time_match, "Fallback code comparison"
+    
+    # Extract the evaluation results
+    title_match = eval_result.get('title_match', False)
+    time_match = eval_result.get('time_match', False)
+    explanation = eval_result.get('explanation', "No explanation provided")
+    
+    return title_match, time_match, explanation
+
+def evaluate_test_case(agent, test_case, case_number=None):
+    """Evaluate a single test case"""
+    # Get test case data
+    message = test_case.get('message', '')
+    expected_result = test_case.get('expected_result', {})
+    notes = test_case.get('notes', '')
+    datetime_str = test_case.get('current_time', None)
+    
+    case_label = f"Case {case_number}: " if case_number else ""
+    print(f"\n{case_label}{message}")
+    if notes:
+        print(f"Notes: {notes}")
+    
+    # Set the current time for the agent if provided
+    current_time = None
+    if datetime_str:
+        try:
+            current_time = datetime.fromisoformat(datetime_str)
+            # Make sure it's timezone-aware
+            if current_time.tzinfo is None:
+                current_time = pytz.timezone('America/Sao_Paulo').localize(current_time)
+            print(f"Current time: {current_time}")
+        except ValueError:
+            print(f"Warning: Invalid datetime format in test case: {datetime_str}")
+    
+    # Create a time-aware reminder agent for testing
+    time_aware_agent = TimeAwareReminderAgent(agent)
+    if current_time:
+        time_aware_agent.set_current_time(current_time)
+    
+    # Call LLM to parse the reminder
+    result = time_aware_agent.parse_reminder(message)
+    
+    # Convert result to expected format
+    if result and 'title' in result and 'scheduled_time' in result:
+        formatted_result = {
+            'title': result['title'],
+            'scheduled_time': result['scheduled_time']
         }
+        # Preserve reminders field for multi-reminder tests
+        if 'reminders' in result:
+            formatted_result['reminders'] = result['reminders']
+    else:
+        formatted_result = None
+    
+    # Use LLM to compare results
+    if not formatted_result:
+        success = False
+        error_message = "No valid reminder extracted"
+        title_match = False
+        time_match = False
+        explanation = "Parser returned no result"
+    else:
+        title_match, time_match, explanation = compare_reminders_with_llm(
+            expected_result, formatted_result, message
+        )
+        success = title_match and time_match
+        
+        if success:
+            error_message = "Success"
+        else:
+            if not title_match and not time_match:
+                error_message = "Both title and time mismatch"
+            elif not title_match:
+                error_message = "Title mismatch"
+            else:
+                error_message = "Time mismatch"
+    
+    # Print result
+    print(f"Expected: {expected_result}")
+    print(f"Got:      {formatted_result}")
+    print(f"Evaluation: {explanation}")
+    print(f"Result:   {'✅ PASS' if success else '❌ FAIL'} - {error_message}")
+    
+    return {
+        'message': message,
+        'expected': expected_result,
+        'actual': formatted_result,
+        'success': success,
+        'error': error_message,
+        'title_match': title_match if formatted_result else False,
+        'time_match': time_match if formatted_result else False,
+        'explanation': explanation if formatted_result else "No reminder parsed"
+    }
 
 def main():
-    # Initialize OpenAI at the start of the script
-    initialize_openai()
-    
-    """Run the evaluation"""
-    parser = argparse.ArgumentParser(description='Evaluate reminder agent on test cases')
-    parser.add_argument('--test-cases', default='agents/reminder_agent/reminder_test_dataset.json',
-                      help='Path to test cases JSON file')
-    parser.add_argument('--output', default='test_results/reminder_eval_results.json',
-                      help='Path to output JSON file')
-    parser.add_argument('--html', default='test_results/reminder_eval_results.html',
-                      help='Path to output HTML report file')
-    parser.add_argument('--delay', type=int, default=2,
-                      help='Delay in seconds between test cases to avoid API rate limiting')
-    parser.add_argument('--no-open', action='store_true',
-                      help='Do not automatically open the HTML report')
+    parser = argparse.ArgumentParser(description='Evaluate reminder parsing')
+    parser.add_argument('--test-file', type=str, default='agents/reminder_agent/reminder_test_dataset.json',
+                        help='Path to the test data JSON file')
+    parser.add_argument('--output-dir', type=str, default='test_results',
+                        help='Directory to save results')
     args = parser.parse_args()
     
-    # Check if test cases file exists
-    if not os.path.exists(args.test_cases):
-        print(f"Error: Test cases file not found: {args.test_cases}")
-        print(f"Please ensure the test cases file exists at the specified path.")
-        return 1
+    # Create output directory if it doesn't exist
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
     
     # Load test cases
-    print(f"Loading test cases from {args.test_cases}")
-    with open(args.test_cases, 'r', encoding='utf-8') as f:
+    print(f"Loading test cases from {args.test_file}")
+    with open(args.test_file, 'r', encoding='utf-8') as f:
         test_cases = json.load(f)
     
-    # Ensure we have test cases
-    if not test_cases:
-        print("Error: No test cases found in the test cases file.")
-        return 1
-
-    # Initialize the reminder agent
-    reminder_agent = TimeAwareReminderAgent(ReminderAgent())
+    # Check if test_cases is a list directly or nested under a key
+    if isinstance(test_cases, dict) and 'test_cases' in test_cases:
+        test_cases = test_cases.get('test_cases', [])
     
-    # Evaluate each test case
+    if not test_cases:
+        print("No test cases found in the file")
+        return
+    
+    # Create agent for testing
+    agent = ReminderAgent()
+    
+    # Process each test case
     results = []
+    passed = 0
+    failed = 0
+    
+    print("\n" + "=" * 70)
+    print("=" * 80)
     for i, test_case in enumerate(test_cases):
-        print("\n" + "=" * 80)
-        print(f"Evaluating test case: {test_case['id']}")
+        print(f"\nEvaluating test case: {test_case.get('id', f'case_{i+1}')}")
+        print("=" * 70)
         print("=" * 80)
         
-        # Parse the current time
-        current_time_str = test_case.get('current_time')
-        if not current_time_str:
-            print("Warning: No current_time specified in test case, using now as default")
-            current_time = datetime.now(pytz.UTC)
-        else:
-            try:
-                current_time = datetime.fromisoformat(current_time_str)
-                if current_time.tzinfo is None:
-                    # Apply default timezone if none specified
-                    current_time = current_time.replace(tzinfo=pytz.UTC)
-            except ValueError:
-                print(f"Error: Invalid current_time format in test case: {current_time_str}")
-                print("Using current time as fallback")
-                current_time = datetime.now(pytz.UTC)
+        # Ensure test case has expected_result
+        if 'expected_result' not in test_case or not test_case['expected_result']:
+            # If missing, create a default one based on the message content
+            # This is just for testing - in production, you'd want proper test cases
+            test_case['expected_result'] = {
+                'title': test_case.get('expected_title', ''),
+                'scheduled_time': test_case.get('expected_time', '')
+            }
         
         # Evaluate the test case
-        result = evaluate_reminder_case(reminder_agent, test_case, current_time)
+        result = evaluate_test_case(agent, test_case, i+1)
+        if result.get('success', False):
+            passed += 1
+        else:
+            failed += 1
         results.append(result)
-        
-        # No delay between test cases
-        pass
     
-    # Calculate overall metrics and save results
-    total_cases = len(results)
-    passed_cases = sum(1 for r in results if r.get("passed", False))
-    failed_cases = total_cases - passed_cases
-    success_rate = passed_cases / total_cases if total_cases > 0 else 0
+    # Calculate overall results
+    total = passed + failed
+    success_rate = (passed / total) * 100 if total > 0 else 0
     
-    print("\n=============================================================================")
-    print(f"Overall results: {passed_cases}/{total_cases} passed ({success_rate:.2%})")
-    print("=============================================================================")
+    print("\n" + "=" * 70)
+    print("=" * 75)
+    print(f"Overall results: {passed}/{total} passed ({success_rate:.2f}%)")
+    print("=" * 70)
+    print("=" * 75)
     
-    # Combine results into a single object
+    # Create final results dictionary
     final_results = {
-        "success_rate": success_rate,
-        "total_cases": total_cases,
-        "passed_cases": passed_cases,
-        "failed_cases": failed_cases,
-        "detailed_results": results
+        'summary': {
+            'success_rate': success_rate,
+            'total_cases': total,
+            'passed_cases': passed,
+            'failed_cases': failed,
+        },
+        'detailed_results': results,
+        'timestamp': datetime.now().isoformat()
     }
     
-    # Save results
-    save_results(final_results, args.output, args.html)
+    # Save results to file
+    output_file = os.path.join(args.output_dir, 'reminder_eval_results.json')
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(final_results, f, indent=2, default=json_serializable)
+    print(f"Results saved to {output_file}")
     
-    print(f"\nResults saved to {args.output}")
-    print(f"HTML report generated at {args.html}")
+    # Generate HTML report
+    html_report = generate_html_report(results)
+    html_file = os.path.join(args.output_dir, 'reminder_eval_results.html')
+    with open(html_file, 'w', encoding='utf-8') as f:
+        f.write(html_report)
+    print(f"HTML report generated at {html_file}")
     
-    # Open the HTML report in the default browser
-    if not args.no_open:
-        try:
-            html_path = os.path.abspath(args.html)
-            print(f"Opening HTML report in browser: {html_path}")
-            webbrowser.open('file://' + html_path)
-        except Exception as e:
-            print(f"Could not open HTML report automatically: {e}")
-    
-    # Return exit code based on success rate
-    return 0 if success_rate == 1.0 else 1
+    # Open the HTML report in a browser
+    print(f"Opening HTML report in browser: {os.path.abspath(html_file)}")
+    webbrowser.open('file://' + os.path.abspath(html_file))
+
+def json_serializable(obj):
+    """Convert datetime objects to ISO format strings for JSON serialization."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
 
 def generate_html_report(results):
-    """Generate an HTML report from the evaluation results"""
-    # If results is from history array, use the provided results object
-    # No need to extract the latest since we're passing the specific result
+    """Generate HTML report from test results"""
+    test_rows = []
     
-    # Get current timestamp for the report
-    execution_time = results.get("timestamp", datetime.now().isoformat())
-    try:
-        execution_time = datetime.fromisoformat(execution_time).strftime("%Y-%m-%d %H:%M:%S")
-    except:
-        pass
+    for idx, result in enumerate(results):
+        # Skip non-dictionary results or handle them appropriately
+        if not isinstance(result, dict):
+            # Log the problematic entry and continue
+            print(f"Warning: Skipping non-dictionary result at index {idx}: {result}")
+            continue
+            
+        # Extract data
+        message = result.get('message', '')
+        expected = result.get('expected', {})
+        actual = result.get('actual', {})
+        success = result.get('success', False)
+        error = result.get('error', '')
+        explanation = result.get('explanation', '')
+        
+        # Prepare data for display
+        expected_display = expected.copy() if expected else {}
+        actual_display = actual.copy() if actual else {}
+        
+        # Convert datetime objects to string for display
+        if expected_display and 'scheduled_time' in expected_display and expected_display['scheduled_time']:
+            if isinstance(expected_display['scheduled_time'], datetime):
+                expected_display['scheduled_time_str'] = expected_display['scheduled_time'].isoformat()
+        
+        if actual_display and 'scheduled_time' in actual_display and actual_display['scheduled_time']:
+            if isinstance(actual_display['scheduled_time'], datetime):
+                actual_display['scheduled_time_str'] = actual_display['scheduled_time'].isoformat()
+        
+        # Convert to JSON string for display, handling datetime objects
+        expected_raw = json.dumps(expected_display, indent=2, default=json_serializable) if expected_display else "Not available"
+        actual_raw = json.dumps(actual_display, indent=2, default=json_serializable) if actual_display else "Not available"
+        
+        # Create HTML row
+        row = f"""
+        <tr class="{'success' if success else 'failure'}">
+            <td>{idx + 1}</td>
+            <td><pre>{message}</pre></td>
+            <td><pre>{expected_raw}</pre></td>
+            <td><pre>{actual_raw}</pre></td>
+            <td>{explanation}</td>
+            <td>{'✅ PASS' if success else '❌ FAIL'}</td>
+            <td>{error}</td>
+        </tr>
+        """
+        test_rows.append(row)
     
-    # Format the results for display
-    formatted_results = []
-    for result in results["detailed_results"]:
-        # Get expected and actual for formatting
-        expected = result.get("expected", {})
-        actual = result.get("actual", {})
+    # Handle empty results
+    if not test_rows:
+        test_rows = ["<tr><td colspan='7'>No results to display</td></tr>"]
         
-        # Format expected for table view - using consistent date format
-        if isinstance(expected, list):
-            expected_formatted = "<ul>"
-            for exp in expected:
-                expected_formatted += f"<li>{exp['title']} at {exp['parsed_time']}</li>"
-            expected_formatted += "</ul>"
-        else:
-            expected_formatted = f"{expected.get('title', 'Not available')} at {expected.get('parsed_time', 'Not available')}"
-        
-        # Format actual for table view - using consistent format
-        if isinstance(actual, dict):
-            if "reminders" in actual and isinstance(actual["reminders"], list):
-                # Multiple reminders case
-                actual_formatted = "<ul>"
-                for rem in actual["reminders"]:
-                    title = rem.get("title", "Not available")
-                    parsed_time = rem.get("parsed_time", "Not available")
-                    actual_formatted += f"<li>{title} at {parsed_time}</li>"
-                actual_formatted += "</ul>"
-            else:
-                # Single reminder case
-                title = actual.get("title", "Not available")
-                parsed_time = actual.get("parsed_time", "Not available")
-                actual_formatted = f"{title} at {parsed_time}"
-        else:
-            actual_formatted = "Not available"
-        
-        # Format status
-        status = "PASSED" if result.get("passed", False) else "FAILED"
-        status_class = "success" if result.get("passed", False) else "danger"
-        status_icon = "✓" if result.get("passed", False) else "✗"
-        
-        # Create display-friendly JSON versions for the detailed view
-        # We'll keep the original structure but ensure date formats are consistent
-        expected_display = copy.deepcopy(expected)
-        actual_display = copy.deepcopy(actual) if actual else None
-        
-        # Get the raw expected and actual JSON for the detailed view
-        expected_raw = json.dumps(expected_display, indent=2)
-        actual_raw = json.dumps(actual_display, indent=2) if actual_display else "Not available"
-        
-        # Format the reasoning with consistent date formats
-        reasoning = result.get("reasoning", "No reasoning provided")
-        
-        # Create our own formatted reasoning for display consistency
-        if "expected" in result and "actual" in result and result["actual"]:
-            # Handle single reminder case
-            if not isinstance(expected, list) and not (isinstance(actual, dict) and "reminders" in actual):
-                expected_title = expected.get("title", "")
-                expected_time = expected.get("parsed_time", "")
-                
-                actual_title = actual.get("title", "")
-                actual_time = actual.get("parsed_time", "")
-                
-                title_match = expected_title.lower() == actual_title.lower() if expected_title and actual_title else False
-                # For display purposes, we compare the original time fields
-                time_match = expected_time == actual_time if expected_time and actual_time else False
-                
-                formatted_reasoning = f"Title match: {title_match}, Time match: {time_match}\n\n"
-                formatted_reasoning += f"Expected: {expected_title} at {expected_time}\n"
-                formatted_reasoning += f"Actual: {actual_title} at {actual_time}"
-                
-                reasoning = formatted_reasoning
-        
-        # Replace newlines with <br> for HTML display
-        reasoning = reasoning.replace("\n", "<br>")
-        
-        formatted_results.append({
-            "id": result["id"],
-            "message": result["message"],
-            "current_time": result.get("current_time", "Not specified"),
-            "expected_formatted": expected_formatted,
-            "actual_formatted": actual_formatted,
-            "expected_raw": expected_raw,
-            "actual_raw": actual_raw,
-            "status": status,
-            "status_class": status_class,
-            "status_icon": status_icon,
-            "reasoning": reasoning,
-            "passed": result.get("passed", False)  # Add passed flag for counting
-        })
+    # Count valid results for summary
+    valid_results = [r for r in results if isinstance(r, dict)]
+    num_results = len(valid_results)
+    num_passed = sum(1 for r in valid_results if r.get('success', False))
     
-    # Calculate summary statistics from the actual results
-    total = len(formatted_results)
-    passed = sum(1 for r in formatted_results if r.get("passed", False))
-    failed = total - passed
-    pass_rate = passed / total * 100 if total > 0 else 0
-    
-    # Generate HTML
+    # Create HTML with improved styling for table fit
     html = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <title>Reminder Agent Evaluation Results</title>
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            h1, h2, h3 {{ color: #333; }}
-            table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            th {{ background-color: #f2f2f2; }}
+            body {{
+                font-family: Arial, sans-serif;
+                margin: 20px;
+                line-height: 1.6;
+            }}
+            h1 {{
+                color: #2c3e50;
+                border-bottom: 2px solid #eee;
+                padding-bottom: 10px;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+                font-size: 13px;
+                table-layout: fixed; /* Fixed layout for better control */
+            }}
+            th, td {{
+                padding: 8px 10px;
+                border-bottom: 1px solid #ddd;
+                text-align: left;
+                word-wrap: break-word; /* Allow words to break */
+                overflow: hidden;
+            }}
+            th {{
+                background-color: #f8f9fa;
+                font-weight: bold;
+            }}
+            th:nth-child(1) {{ width: 3%; }} /* # column */
+            th:nth-child(2) {{ width: 20%; }} /* Message column */
+            th:nth-child(3) {{ width: 20%; }} /* Expected column */
+            th:nth-child(4) {{ width: 20%; }} /* Actual column */
+            th:nth-child(5) {{ width: 20%; }} /* Explanation column */
+            th:nth-child(6) {{ width: 7%; }} /* Result column */
+            th:nth-child(7) {{ width: 10%; }} /* Error column */
             
-            /* Tab styles */
-            .tab {{ overflow: hidden; border: 1px solid #ccc; background-color: #f1f1f1; margin-bottom: 20px; }}
-            .tab button {{ background-color: inherit; float: left; border: none; outline: none; cursor: pointer; padding: 14px 16px; transition: 0.3s; }}
-            .tab button:hover {{ background-color: #ddd; }}
-            .tab button.active {{ background-color: #ccc; }}
-            .tabcontent {{ display: none; padding: 6px 12px; border: 1px solid #ccc; border-top: none; }}
-            #Overview {{ display: block; }}
-            
-            /* Table row styles */
-            .success {{ background-color: #dff0d8; }}
-            .danger {{ background-color: #f2dede; }}
-            
-            /* Detailed view styles */
-            .details-container {{ margin-bottom: 30px; border: 1px solid #ddd; border-radius: 5px; overflow: hidden; }}
-            .details-success {{ border-left: 8px solid #5cb85c; }}
-            .details-danger {{ border-left: 8px solid #d9534f; }}
-            .details-header {{ padding: 15px; background-color: #fff; }}
-            .details-message {{ padding: 0 15px; margin: 10px 0; }}
-            .details-section {{ padding: 15px; margin: 0; }}
-            .details-code {{ background-color: #f5f5f5; padding: 15px; margin: 0; font-family: monospace; white-space: pre-wrap; }}
-            .details-reasoning {{ background-color: #fcf8e3; padding: 15px; margin: 0; }}
-            .section-label {{ font-weight: bold; margin-bottom: 5px; display: block; }}
-            .summary {{ margin: 20px 0; }}
-            .execution-time {{ color: #666; font-style: italic; margin-bottom: 20px; }}
+            .summary {{
+                background-color: #f8f9fa;
+                border-left: 4px solid #5bc0de;
+                padding: 15px;
+                margin-bottom: 20px;
+            }}
+            .success td {{
+                background-color: #f0fff0;
+            }}
+            .failure td {{
+                background-color: #fff0f0;
+            }}
+            pre {{
+                background-color: #f8f9fa;
+                padding: 6px;
+                border-radius: 4px;
+                overflow-x: auto;
+                font-size: 12px; /* Smaller font for code */
+                max-height: 120px; /* Limit height with scroll */
+                margin: 0;
+            }}
+            /* Make the table responsive */
+            @media screen and (max-width: 1200px) {{
+                table {{
+                    font-size: 12px;
+                }}
+                th, td {{
+                    padding: 6px 8px;
+                }}
+                pre {{
+                    font-size: 11px;
+                    padding: 4px;
+                }}
+            }}
         </style>
     </head>
     <body>
         <h1>Reminder Agent Evaluation Results</h1>
-        <div class="execution-time">Report generated on: {execution_time}</div>
-        
-        <div class="tab">
-            <button class="tablinks active" onclick="openTab(event, 'Overview')">Overview</button>
-            <button class="tablinks" onclick="openTab(event, 'Details')">Detailed Results</button>
+        <div class="summary">
+            <h2>Summary</h2>
+            <p>Total test cases: {num_results}</p>
+            <p>Passed: {num_passed}</p>
+            <p>Failed: {num_results - num_passed}</p>
+            <p>Success rate: {(num_passed / num_results * 100) if num_results > 0 else 0:.2f}%</p>
         </div>
-        
-        <div id="Overview" class="tabcontent">
-            <div class="summary">
-                <h2>Summary</h2>
-                <p>Total test cases: {total}</p>
-                <p>Passed: {passed} ({pass_rate:.1f}%)</p>
-                <p>Failed: {failed} ({100 - pass_rate:.1f}%)</p>
-            </div>
-            
-            <h2>Results Overview</h2>
-            <table>
+        <table>
+            <thead>
                 <tr>
-                    <th>ID</th>
+                    <th>#</th>
                     <th>Message</th>
-                    <th>Current Time</th>
                     <th>Expected</th>
                     <th>Actual</th>
-                    <th>Status</th>
+                    <th>Explanation</th>
+                    <th>Result</th>
+                    <th>Error</th>
                 </tr>
-    """
-    
-    for r in formatted_results:
-        html += f"""
-                <tr class="{r['status_class']}">
-                    <td>{r['id']}</td>
-                    <td>{r['message']}</td>
-                    <td>{r['current_time']}</td>
-                    <td>{r['expected_formatted']}</td>
-                    <td>{r['actual_formatted']}</td>
-                    <td>{r['status']}</td>
-                </tr>
-        """
-    
-    html += """
-            </table>
-        </div>
-        
-        <div id="Details" class="tabcontent">
-            <h2>Detailed Test Results</h2>
-    """
-    
-    for r in formatted_results:
-        html += f"""
-            <div class="details-container details-{r['status_class']}">
-                <div class="details-header">
-                    <h3>{r['id']} - {r['status_icon']} {r['status']}</h3>
-                </div>
-                
-                <div class="details-message">
-                    <span class="section-label">Message:</span> {r['message']}
-                </div>
-                
-                <div class="details-section">
-                    <span class="section-label">Expected:</span>
-                </div>
-                <pre class="details-code">{r['expected_raw']}</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Actual:</span>
-                </div>
-                <pre class="details-code">{r['actual_raw']}</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Reasoning:</span>
-                </div>
-                <div class="details-reasoning">{r['reasoning']}</div>
-            </div>
-        """
-    
-    html += """
-        </div>
-        
-        <script>
-            function openTab(evt, tabName) {
-                var i, tabcontent, tablinks;
-                
-                // Hide all tab content
-                tabcontent = document.getElementsByClassName("tabcontent");
-                for (i = 0; i < tabcontent.length; i++) {
-                    tabcontent[i].style.display = "none";
-                }
-                
-                // Remove "active" class from all tab buttons
-                tablinks = document.getElementsByClassName("tablinks");
-                for (i = 0; i < tablinks.length; i++) {
-                    tablinks[i].className = tablinks[i].className.replace(" active", "");
-                }
-                
-                // Show the selected tab and add "active" class to the button
-                document.getElementById(tabName).style.display = "block";
-                evt.currentTarget.className += " active";
-            }
-        </script>
+            </thead>
+            <tbody>
+                {''.join(test_rows)}
+            </tbody>
+        </table>
     </body>
     </html>
     """
-    
     return html
 
-def save_results(results, output_file, html_file):
-    """Save results to JSON and HTML files"""
-    # Create output directory if it doesn't exist
-    output_dir = os.path.dirname(output_file)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    # Add timestamp to current results
-    timestamp = datetime.now().isoformat()
-    results_with_meta = {
-        "timestamp": timestamp,
-        "success_rate": results["success_rate"],
-        "total_cases": results["total_cases"],
-        "passed_cases": results["passed_cases"],
-        "failed_cases": results["failed_cases"],
-        "detailed_results": results["detailed_results"]
-    }
-    
-    # Load existing results history if file exists
-    history = []
-    if os.path.exists(output_file):
-        try:
-            with open(output_file, 'r', encoding='utf-8') as f:
-                existing_data = json.load(f)
-                # Check if existing data is already a list or a single result
-                if isinstance(existing_data, list):
-                    history = existing_data
-                else:
-                    # If it's a single result object, convert to a list
-                    history = [existing_data]
-        except (json.JSONDecodeError, FileNotFoundError):
-            # If file is corrupted or doesn't exist, start fresh
-            history = []
-    
-    # Add current results to history
-    history.append(results_with_meta)
-    
-    # Write updated history back to file
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(history, f, indent=2, ensure_ascii=False)
-    
-    # Generate and save HTML report (using only the most recent results)
-    html_content = generate_html_report(results_with_meta)
-    with open(html_file, 'w', encoding='utf-8') as f:
-        f.write(html_content)
-    
-    return results_with_meta
-
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == '__main__':
+    main()

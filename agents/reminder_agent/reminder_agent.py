@@ -5,36 +5,39 @@ import os
 import re
 import logging
 from utils.datetime_utils import format_time_exact
+from utils.llm_utils import get_openai_client, chat_completion, parse_json_response
+from dateutil import parser
+from pytz import timezone as pytz_timezone
+
+# Import reminder DB functions
 from agents.reminder_agent.reminder_db import (
     list_reminders, create_reminder, cancel_reminder,
     format_reminder_list_by_time, format_created_reminders,
     format_datetime, BRAZIL_TIMEZONE
 )
-from utils.llm_utils import get_openai_client, chat_completion, parse_json_response
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ReminderAgent")
 
+# Get a consistent timezone to use throughout the agent
+BRAZIL_TZ = pytz.timezone('America/Sao_Paulo')
+
 class ReminderAgent:
-    def __init__(self, send_message_func=None, intent_classifier=None, api_key=None):
-        """
-        Initialize the reminder agent
+    def __init__(self, config=None):
+        # Initialize logger
+        self.logger = logging.getLogger(__name__)
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
         
-        Args:
-            send_message_func: Function to send messages to users
-            intent_classifier: Intent classifier instance
-            api_key: OpenAI API key (deprecated, kept for backward compatibility)
-        """
-        self.timezone = pytz.timezone('America/Sao_Paulo')
-        self.send_message_func = send_message_func
-        self.intent_classifier = intent_classifier
+        # Rest of initialization code
+        self.config = config or {}
+        self.logger.info("ReminderAgent initialized")
         
-        # Check if OpenAI client is available
-        if not get_openai_client():
-            logger.error("No OpenAI client available. Cannot parse reminder without LLM.")
-            raise ValueError("OpenAI client is not available. Cannot parse reminder without LLM.")
-    
     def handle_reminder_intent(self, user_phone, message_text):
         """Processa intenções relacionadas a lembretes"""
         try:
@@ -43,11 +46,11 @@ class ReminderAgent:
                 message_text = ' '.join(str(x) for x in message_text)  # Convert list to string safely
             normalized_text = str(message_text).lower().strip()
 
-            logger.info(f"Processing reminder intent with normalized text: '{normalized_text}'")
+            self.logger.info(f"Processing reminder intent with normalized text: '{normalized_text}'")
 
             # Special case for "cancelar todos os lembretes" - handle it directly
             if "cancelar todos" in normalized_text or "excluir todos" in normalized_text or "apagar todos" in normalized_text:
-                logger.info("Detected cancel all reminders request")
+                self.logger.info("Detected cancel all reminders request")
 
                 # Get all active reminders for this user
                 reminders = list_reminders(user_phone)
@@ -70,9 +73,9 @@ class ReminderAgent:
             # Use the same list_keywords as in detect_reminder_intent
             list_keywords = ["lembretes", "meus lembretes", "listar lembretes", "ver lembretes", "mostrar lembretes"]
             if any(keyword in normalized_text for keyword in list_keywords):
-                logger.info("Detected list reminders request")
+                self.logger.info("Detected list reminders request")
                 reminders = list_reminders(user_phone)
-                logger.info(f"Found {len(reminders)} reminders to list")
+                self.logger.info(f"Found {len(reminders)} reminders to list")
                 return format_reminder_list_by_time(reminders)
 
             # Verificar se é uma solicitação para cancelar lembretes
@@ -84,25 +87,25 @@ class ReminderAgent:
             is_create_request = any(keyword in normalized_text for keyword in create_keywords)
 
             if is_cancel_request:
-                logger.info("Detected cancel reminder request")
+                self.logger.info("Detected cancel reminder request")
 
                 # First, get the list of active reminders for this user
                 reminders = list_reminders(user_phone)
-                logger.info(f"Found {len(reminders)} active reminders for user {user_phone}")
+                self.logger.info(f"Found {len(reminders)} active reminders for user {user_phone}")
 
                 if not reminders:
                     return "Você não tem lembretes ativos para cancelar."
 
                 # Parse the cancellation request
                 cancel_data = self.parse_reminder(normalized_text, "cancelar")
-                logger.info(f"Cancel data after parsing: {cancel_data}")
+                self.logger.info(f"Cancel data after parsing: {cancel_data}")
 
                 if cancel_data and "cancel_type" in cancel_data:
                     cancel_type = cancel_data["cancel_type"]
 
                     # Handle different cancellation types
                     if cancel_type == "all":
-                        logger.info("Cancelling all reminders")
+                        self.logger.info("Cancelling all reminders")
                         canceled_count = 0
                         for reminder in reminders:
                             success = cancel_reminder(reminder['id'])
@@ -116,7 +119,7 @@ class ReminderAgent:
 
                     elif cancel_type == "number":
                         numbers = cancel_data.get("numbers", [])
-                        logger.info(f"Cancelling reminders by numbers: {numbers}")
+                        self.logger.info(f"Cancelling reminders by numbers: {numbers}")
 
                         if not numbers:
                             return "Por favor, especifique quais lembretes deseja cancelar pelo número."
@@ -152,7 +155,7 @@ class ReminderAgent:
                     elif cancel_type == "range":
                         range_start = cancel_data.get("range_start", 1)
                         range_end = cancel_data.get("range_end", len(reminders))
-                        logger.info(f"Cancelling reminders in range: {range_start} to {range_end}")
+                        self.logger.info(f"Cancelling reminders in range: {range_start} to {range_end}")
 
                         # Validate range
                         if range_start < 1:
@@ -186,7 +189,7 @@ class ReminderAgent:
 
                     elif cancel_type == "title":
                         title = cancel_data.get("title", "").lower()
-                        logger.info(f"Cancelling reminders by title: {title}")
+                        self.logger.info(f"Cancelling reminders by title: {title}")
 
                         if not title:
                             return "Por favor, especifique o título ou palavras-chave do lembrete que deseja cancelar."
@@ -218,19 +221,19 @@ class ReminderAgent:
                 return "Não entendi qual lembrete você deseja cancelar. Por favor, especifique o número ou título do lembrete."
 
             elif is_create_request:
-                logger.info("Detected create reminder request")
+                self.logger.info("Detected create reminder request")
                 # Parse the reminder data
                 reminder_data = self.parse_reminder(normalized_text, "criar")
-                logger.info(f"Reminder data after parsing: {reminder_data}")
+                self.logger.info(f"Reminder data after parsing: {reminder_data}")
 
                 if reminder_data and "reminders" in reminder_data and reminder_data["reminders"]:
-                    logger.info(f"Found {len(reminder_data['reminders'])} reminders in parsed data")
+                    self.logger.info(f"Found {len(reminder_data['reminders'])} reminders in parsed data")
                     # Processar múltiplos lembretes
                     created_reminders = []
                     invalid_reminders = []
 
                     for reminder in reminder_data["reminders"]:
-                        logger.info(f"Processing reminder: {reminder}")
+                        self.logger.info(f"Processing reminder: {reminder}")
                         if "title" in reminder and "datetime" in reminder:
                             # Process datetime components
                             dt_components = reminder["datetime"]
@@ -255,7 +258,7 @@ class ReminderAgent:
 
                                 # Check if the reminder is in the past
                                 if dt < now_local:
-                                    logger.warning(f"Attempted to create reminder in the past: {reminder['title']} at {dt}")
+                                    self.logger.warning(f"Attempted to create reminder in the past: {reminder['title']} at {dt}")
                                     invalid_reminders.append({
                                         "title": reminder["title"],
                                         "time": dt,
@@ -274,11 +277,11 @@ class ReminderAgent:
                                         "title": reminder["title"],
                                         "time": scheduled_time
                                     })
-                                    logger.info(f"Created reminder {reminder_id}: {reminder['title']} at {scheduled_time}")
+                                    self.logger.info(f"Created reminder {reminder_id}: {reminder['title']} at {scheduled_time}")
                                 else:
-                                    logger.error(f"Failed to create reminder: {reminder['title']}")
+                                    self.logger.error(f"Failed to create reminder: {reminder['title']}")
                             except Exception as e:
-                                logger.error(f"Error processing datetime: {str(e)}")
+                                self.logger.error(f"Error processing datetime: {str(e)}")
 
                     # Formatar resposta para múltiplos lembretes
                     if created_reminders:
@@ -305,18 +308,18 @@ class ReminderAgent:
                         else:
                             return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
                     else:
-                        logger.warning("Failed to create any reminders")
+                        self.logger.warning("Failed to create any reminders")
                         return "❌ Não consegui criar os lembretes. Por favor, tente novamente."
                 else:
-                    logger.warning("Failed to parse reminder creation request")
+                    self.logger.warning("Failed to parse reminder creation request")
                     return "❌ Não consegui entender os detalhes do lembrete. Por favor, especifique o título e quando deseja ser lembrado."
 
             # If we get here, we couldn't determine the intent
-            logger.warning(f"Could not determine specific reminder intent for: '{normalized_text}'")
+            self.logger.warning(f"Could not determine specific reminder intent for: '{normalized_text}'")
             return "Não entendi o que você deseja fazer com os lembretes. Você pode criar, listar ou cancelar lembretes."
 
         except Exception as e:
-            logger.error(f"Error in handle_reminder_intent: {str(e)}")
+            self.logger.error(f"Error in handle_reminder_intent: {str(e)}")
             return "Ocorreu um erro ao processar sua solicitação de lembrete. Por favor, tente novamente."
 
     def process_reminder(self, user_phone, title, time_str):
@@ -334,13 +337,13 @@ class ReminderAgent:
                 return "❌ Não consegui criar o lembrete. Por favor, tente novamente."
 
         except Exception as e:
-            logger.error(f"Error processing reminder: {str(e)}")
+            self.logger.error(f"Error processing reminder: {str(e)}")
             return "❌ Não consegui processar o lembrete. Por favor, tente novamente."
 
     def start_reminder_checker(self):
         """Inicia o verificador de lembretes em uma thread separada como backup"""
         def reminder_checker_thread():
-            logger.info("Backup reminder checker thread started")
+            self.logger.info("Backup reminder checker thread started")
 
             # Configurar o intervalo de verificação (mais longo, já que temos o cron-job.org)
             check_interval = 300  # 5 minutos
@@ -352,22 +355,22 @@ class ReminderAgent:
                     time_module.sleep(check_interval)
 
                     # Depois verificar os lembretes
-                    logger.info("Running backup reminder check")
+                    self.logger.info("Running backup reminder check")
                     self.check_and_send_reminders()
 
                 except Exception as e:
-                    logger.error(f"Error in backup reminder checker: {str(e)}")
+                    self.logger.error(f"Error in backup reminder checker: {str(e)}")
 
         import threading
         thread = threading.Thread(target=reminder_checker_thread, daemon=True)
         thread.start()
-        logger.info("Backup reminder checker background thread started")
+        self.logger.info("Backup reminder checker background thread started")
         return thread
 
     def check_and_send_reminders(self):
         """Checks for pending reminders and sends notifications"""
         try:
-            logger.info("Checking for pending reminders...")
+            self.logger.info("Checking for pending reminders...")
 
             # Get current time in UTC
             now = datetime.now(timezone.utc)
@@ -382,7 +385,7 @@ class ReminderAgent:
                 .execute()
 
             reminders = result.data
-            logger.info(f"Found {len(reminders)} active reminders")
+            self.logger.info(f"Found {len(reminders)} active reminders")
 
             # Filter reminders manually to ignore seconds
             pending_reminders = []
@@ -393,14 +396,14 @@ class ReminderAgent:
 
                 # Only include reminders that are due (current time >= scheduled time)
                 # Add a debug log to see the comparison
-                logger.info(f"Comparing reminder time {scheduled_time_truncated} with current time {now_truncated}")
+                self.logger.info(f"Comparing reminder time {scheduled_time_truncated} with current time {now_truncated}")
                 if now_truncated >= scheduled_time_truncated:
-                    logger.info(f"Reminder {reminder['id']} is due")
+                    self.logger.info(f"Reminder {reminder['id']} is due")
                     pending_reminders.append(reminder)
                 else:
-                    logger.info(f"Reminder {reminder['id']} is not yet due")
+                    self.logger.info(f"Reminder {reminder['id']} is not yet due")
 
-            logger.info(f"Found {len(pending_reminders)} pending reminders after time comparison")
+            self.logger.info(f"Found {len(pending_reminders)} pending reminders after time comparison")
 
             sent_count = 0
             failed_count = 0
@@ -417,10 +420,10 @@ class ReminderAgent:
                         .eq('id', reminder['id']) \
                         .execute()
 
-                    logger.info(f"Reminder {reminder['id']} marked as inactive after sending")
+                    self.logger.info(f"Reminder {reminder['id']} marked as inactive after sending")
                     sent_count += 1
                 else:
-                    logger.warning(f"Failed to send reminder {reminder['id']}, will try again later")
+                    self.logger.warning(f"Failed to send reminder {reminder['id']}, will try again later")
                     failed_count += 1
 
             # Also check late reminders
@@ -437,7 +440,7 @@ class ReminderAgent:
                 "late_deactivated": late_results.get("deactivated", 0)
             }
         except Exception as e:
-            logger.error(f"Error checking reminders: {str(e)}")
+            self.logger.error(f"Error checking reminders: {str(e)}")
             return {"error": str(e)}
 
     def check_late_reminders(self):
@@ -475,7 +478,7 @@ class ReminderAgent:
             deactivated = 0
 
             if late_reminders:
-                logger.info(f"Found {len(late_reminders)} late reminders")
+                self.logger.info(f"Found {len(late_reminders)} late reminders")
                 processed = len(late_reminders)
 
                 for reminder in late_reminders:
@@ -489,7 +492,7 @@ class ReminderAgent:
                             .eq('id', reminder['id']) \
                             .execute()
 
-                        logger.info(f"Late reminder {reminder['id']} marked as inactive after sending")
+                        self.logger.info(f"Late reminder {reminder['id']} marked as inactive after sending")
                         sent += 1
                     else:
                         # For very late reminders (over 2 hours), deactivate them
@@ -502,10 +505,10 @@ class ReminderAgent:
                                 .eq('id', reminder['id']) \
                                 .execute()
 
-                            logger.warning(f"Deactivated very late reminder {reminder['id']} (over 2 hours late)")
+                            self.logger.warning(f"Deactivated very late reminder {reminder['id']} (over 2 hours late)")
                             deactivated += 1
                         else:
-                            logger.warning(f"Failed to send late reminder {reminder['id']}, will try again later")
+                            self.logger.warning(f"Failed to send late reminder {reminder['id']}, will try again later")
                             failed += 1
 
             return {
@@ -516,7 +519,7 @@ class ReminderAgent:
             }
 
         except Exception as e:
-            logger.error(f"Error checking late reminders: {str(e)}")
+            self.logger.error(f"Error checking late reminders: {str(e)}")
             return {
                 "processed": 0,
                 "sent": 0,
@@ -534,7 +537,7 @@ class ReminderAgent:
             # Format the message
             message_body = f"🔔 *LEMBRETE*: {title}"
 
-            logger.info(f"Sending reminder to {user_phone}: {message_body}")
+            self.logger.info(f"Sending reminder to {user_phone}: {message_body}")
 
             # Use the send_message_func if provided
             if self.send_message_func:
@@ -546,200 +549,437 @@ class ReminderAgent:
                     store_conversation(user_phone, message_body, 'text', False, agent="REMINDER")
                     return True
                 else:
-                    logger.error(f"Failed to send reminder to {user_phone}")
+                    self.logger.error(f"Failed to send reminder to {user_phone}")
                     return False
             else:
-                logger.error("No send_message_func provided to ReminderAgent")
+                self.logger.error("No send_message_func provided to ReminderAgent")
                 return False
 
         except Exception as e:
-            logger.error(f"Error sending reminder notification: {str(e)}")
+            self.logger.error(f"Error sending reminder notification: {str(e)}")
             return False
 
-    def parse_reminder(self, message, action_type):
-        """Parse a reminder message to extract title and time"""
-        logger.info(f"Parsing reminder: '{message}' with action_type: {action_type}")
-        
-        # Parse the current_time if provided
-        current_time = None
-        if action_type and isinstance(action_type, dict) and 'current_time' in action_type:
-            try:
-                # Try to parse the current_time from the action_type
-                current_time_str = action_type['current_time']
-                logger.info(f"Current time string from action_type: '{current_time_str}'")
-                
-                # Remove timezone info if present
-                date_part = current_time_str.replace(" BRT", "")
-                logger.info(f"Cleaned current time string: '{date_part}'")
-                
-                current_time = datetime.strptime(date_part, "%b/%d/%Y %H:%M")
-                current_time = self.timezone.localize(current_time)
-                logger.info(f"Parsed current time: {current_time.isoformat()}")
-            except (ValueError, TypeError) as e:
-                logger.error(f"Error parsing current_time: {str(e)}. Using system time.")
-        
-        # If current_time couldn't be parsed, use system time
-        if not current_time:
-            current_time = datetime.now(self.timezone)
-            logger.info(f"Using system time: {current_time.isoformat()}")
-        
-        
-        # Use LLM-based parsing if available
-        if get_openai_client():
-            try:
-                logger.info("Attempting to parse with LLM")
-                llm_result = self.parse_reminder_with_llm(message, current_time)
-                logger.info(f"LLM parsing result: {llm_result}")
-                
-                # Process the result to ensure it has the expected format
-                if "title" not in llm_result or not llm_result["title"]:
-                    logger.warning("LLM result missing title, using fallback")
-                    llm_result["title"] = "Lembrete"
-                
-                if "parsed_time" not in llm_result or not llm_result["parsed_time"]:
-                    logger.warning("LLM result missing parsed_time, using fallback")
-                    reminder_time = current_time + timedelta(minutes=30)
-                    llm_result["parsed_time"] = format_time_exact(reminder_time)
-                
-                logger.info(f"Final LLM result: {llm_result}")
-                
-                # Extract title and time from LLM response
-                title = llm_result.get('title')
-                parsed_time_str = llm_result.get('parsed_time')
-                
-                logger.info(f"Reminder data after parsing: {llm_result}")
-                
-                # Ensure we have both title and time
-                if not title or not parsed_time_str:
-                    logger.warning(f"Missing title or time in LLM response: {llm_result}")
-                    return None
-                    
-                # Try to parse the time string into a datetime object
-                try:
-                    # First try with the expected format
-                    parsed_time = datetime.strptime(parsed_time_str, "%b/%d/%Y %H:%M %Z")
-                except ValueError:
-                    try:
-                        # Try alternative format without timezone
-                        parsed_time = datetime.strptime(parsed_time_str, "%b/%d/%Y %H:%M")
-                    except ValueError:
-                        # Try with more flexible parsing
-                        import dateutil.parser
-                        try:
-                            parsed_time = dateutil.parser.parse(parsed_time_str)
-                        except:
-                            logger.warning(f"Could not parse time string: {parsed_time_str}")
-                            return None
-                
-                # Create and return the reminder object
-                return {
-                    "title": title,
-                    "scheduled_time": parsed_time,
-                    "user_phone": self.user_phone
-                }
-            except Exception as e:
-                logger.error(f"LLM parsing failed: {str(e)}. Using rule-based parsing.")
-        else:
-            logger.error("No OpenAI client available")
-            raise ValueError("OpenAI client is not available. Cannot parse reminder without LLM.")
-    
-    def parse_reminder_with_llm(self, message, current_time):
-        """Parse a reminder message using LLM to extract title and time"""
-        prompt = f"""
-        Current time: {current_time.isoformat()}
-        Request: "{message}"
-        
-        Parse this reminder request in Portuguese. You MUST extract:
-        1. The title of each reminder (this is REQUIRED and should never be empty)
-        2. The exact time for each reminder (this is REQUIRED and should always be present)
-        
-        For multiple reminders in a single message, return an array of all reminders.
-        
-        Important instructions:
-        - NEVER leave a reminder without a title
-        - NEVER leave a reminder without a parsed_time
-        - Always extract the actual title from the user's message
-        - When Friday is mentioned, use the CORRECT date for the coming Friday
-
-        Example 1:
-        Current time: 2025-03-05T14:47:00
-        Request: "Me lembra de pagar a babá daqui 2h"
-        Expected output:
-        {{
-          "title": "pagar a babá",
-          "parsed_time": "Mar/5/2025 16:47 BRT"
-        }}
-        
-        Example 2:
-        Current time: 2025-03-05T14:47:00
-        Request: "Daqui 30 minutos me lembra de tirar a roupa da máquina"
-        Expected output:
-        {{
-          "title": "tirar a roupa da máquina",
-          "parsed_time": "Mar/5/2025 15:17 BRT"
-        }}
-        
-        Example 3:
-        Current time: 2025-03-05T14:47:00
-        Request: "Me lembra de ligar para o médico amanhã às 10h"
-        Expected output:
-        {{
-          "title": "ligar para o médico",
-          "parsed_time": "Mar/6/2025 10:00 BRT"
-        }}
-        
-        Example 4:
-        Current time: 2025-03-05T14:47:00
-        Request: "Me lembra de:
-        -pagar a conta de luz amanhã as 10
-        -levar o cachorro no pet shop na sexta as 8
-        -ir na padaria daqui 3h"
-        Expected output:
-        {{
-          "reminders": [
-            {{
-              "title": "pagar a conta de luz",
-              "parsed_time": "Mar/6/2025 10:00 BRT"
-            }},
-            {{
-              "title": "levar o cachorro no pet shop",
-              "parsed_time": "Mar/7/2025 08:00 BRT"
-            }},
-            {{
-              "title": "ir na padaria",
-              "parsed_time": "Mar/5/2025 17:47 BRT"
-            }}
-          ]
-        }}
-        
-        Return your answer as a JSON object with these fields:
-        - For single reminders: title and parsed_time
-        - For multiple reminders: a reminders array with title and parsed_time for each
-        The parsed_time should be formatted as "Mar/d/YYYY HH:MM BRT"
+    def _parse_time(self, time_str, current_time=None):
         """
+        Parse a time string into a datetime object.
         
-        logger.info(f"Preparing LLM prompt with current_time: {current_time.isoformat()}")
-        logger.info("Sending request to OpenAI API")
+        Args:
+            time_str (str): The time string to parse
+            current_time (datetime, optional): The current time context
+            
+        Returns:
+            datetime: The parsed datetime object
+        """
+        try:
+            self.logger.info(f"Parsing time: {time_str}")
+            
+            # Default to current time if not provided
+            if not current_time:
+                current_time = datetime.now(tz=BRAZIL_TZ)
+            elif current_time.tzinfo is None:
+                # Add timezone if missing
+                current_time = BRAZIL_TZ.localize(current_time)
+            
+            # Handle common relative time expressions
+            time_str = time_str.lower()
+            
+            # Handle "tomorrow" expressions
+            if "tomorrow" in time_str:
+                # Start with next day
+                base_date = current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                
+                # Extract time if present (e.g., "tomorrow at 10:00 AM")
+                time_match = re.search(r'(\d{1,2}):?(\d{2})?\s*(am|pm)?', time_str)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2)) if time_match.group(2) else 0
+                    
+                    # Adjust for AM/PM
+                    if time_match.group(3) == 'pm' and hour < 12:
+                        hour += 12
+                    elif time_match.group(3) == 'am' and hour == 12:
+                        hour = 0
+                    
+                    return base_date.replace(hour=hour, minute=minute)
+                else:
+                    # Default to 9:00 AM if no specific time
+                    return base_date.replace(hour=9, minute=0)
+            
+            # Handle "in X hours/minutes" or "daqui X horas/minutos" expressions
+            hours_match = re.search(r'(\d+)\s*h(ora)?s?', time_str)
+            minutes_match = re.search(r'(\d+)\s*min(uto)?s?', time_str)
+            
+            if "daqui" in time_str or "in" in time_str:
+                delta = timedelta()
+                
+                if hours_match:
+                    hours = int(hours_match.group(1))
+                    delta += timedelta(hours=hours)
+                    
+                if minutes_match:
+                    minutes = int(minutes_match.group(1))
+                    delta += timedelta(minutes=minutes)
+                    
+                if delta.total_seconds() > 0:
+                    return current_time + delta
+            
+            # Handle specific date formats
+            date_formats = [
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+                "%d/%m/%Y %H:%M",
+                "%b/%d/%Y %H:%M",
+                "%B %d, %Y %H:%M",
+                "%Y-%m-%dT%H:%M:%S",
+            ]
+            
+            for fmt in date_formats:
+                try:
+                    dt = datetime.strptime(time_str, fmt)
+                    # Add timezone if missing
+                    if dt.tzinfo is None:
+                        dt = BRAZIL_TZ.localize(dt)
+                    return dt
+                except ValueError:
+                    continue
+                
+            # Try dateutil parser as a fallback
+            try:
+                dt = parser.parse(time_str, fuzzy=True)
+                # Add timezone if missing
+                if dt.tzinfo is None:
+                    dt = BRAZIL_TZ.localize(dt)
+                return dt
+            except Exception as e:
+                self.logger.warning(f"Failed to parse with dateutil parser: {e}")
+            
+            # Handle day of month (e.g., "dia 7 as 8h")
+            day_match = re.search(r'dia\s+(\d{1,2})', time_str)
+            if day_match:
+                day = int(day_match.group(1))
+                
+                # Start with current month and year
+                target_date = current_time.replace(day=1)
+                
+                # If the day has already passed this month, move to next month
+                if day < current_time.day:
+                    target_date = target_date.replace(month=target_date.month % 12 + 1)
+                    if target_date.month == 1:
+                        target_date = target_date.replace(year=target_date.year + 1)
+                
+                # Set the day
+                target_date = target_date.replace(day=day)
+                
+                # Extract time if present
+                time_match = re.search(r'(\d{1,2}):?(\d{2})?\s*(am|pm|h)?', time_str)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2)) if time_match.group(2) else 0
+                    
+                    # Adjust for AM/PM
+                    if time_match.group(3) == 'pm' and hour < 12:
+                        hour += 12
+                    elif time_match.group(3) == 'am' and hour == 12:
+                        hour = 0
+                    
+                    return target_date.replace(hour=hour, minute=minute)
+                else:
+                    # Default to 9:00 AM if no specific time
+                    return target_date.replace(hour=9, minute=0)
+            
+            # If all parsing methods fail
+            raise ValueError(f"Could not parse time string: {time_str}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing time {time_str}: {e}")
+            raise
+    
+    def _parse_with_llm(self, message, current_time=None):
+        """
+        Parse a reminder message with LLM.
         
-        # Make the API call using the utility function
-        result = chat_completion(
-            messages=[
-                {"role": "system", "content": "You are a specialized reminder parsing assistant for Portuguese language. Your job is to extract reminder titles and times from natural language requests with perfect accuracy. You must ALWAYS include both title and parsed_time for every reminder. When Friday is mentioned, always use the correct date for the coming Friday."},
-                {"role": "user", "content": prompt}
-            ],
-            model="gpt-3.5-turbo",
-            temperature=0.1,
-            response_format={"type": "json_object"}
-        )
+        Args:
+            message (str): The reminder message to parse
+            current_time (datetime, optional): The current time context
+            
+        Returns:
+            dict: The parsed reminder data
+        """
+        try:
+            # Format the current time for the prompt
+            current_time_str = "not specified"
+            if current_time:
+                # Ensure current_time has timezone
+                if current_time.tzinfo is None:
+                    current_time = BRAZIL_TZ.localize(current_time)
+                current_time_str = current_time.strftime("%b/%d/%Y %H:%M %Z")
+                
+            # Build prompt
+            prompt = f"""
+            You are a reminder parsing assistant. Extract the following information from the message:
+            1. Title of the reminder (what the user wants to be reminded about)
+            2. Scheduled time (when to remind them)
+
+            Message: {message}
+            Current time: {current_time_str}
+
+            Parse the message and return a JSON object with the following structure:
+            {{
+                "title": "Title of the reminder",
+                "parsed_time": "Specific date and time"
+            }}
+
+            If there are multiple reminders, include them in a 'reminders' array with the same structure.
+            """
+            
+            # Use the chat_completion function that's already imported
+            content = chat_completion(
+                messages=[
+                    {"role": "system", "content": "You are a reminder parsing assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                model="gpt-3.5-turbo",
+                temperature=0.1
+            )
+            
+            # Parse the JSON from the response
+            # Extract the JSON part from the response
+            result = self._extract_json_from_response(content)
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error in _parse_with_llm: {e}")
+            return None
         
-        if not result:
-            raise ValueError("Failed to get response from LLM")
+    def _call_llm(self, prompt):
+        """Call the LLM with the given prompt using our custom LLM utilities"""
+        try:
+            # Import the LLM utilities from your project
+            from utils.llm_utils import get_completion
+            
+            # Call the LLM using your utility function
+            content = get_completion(prompt)
+            
+            self.logger.info(f"LLM response received: {content[:100]}...")
+            return content
+            
+        except Exception as e:
+            self.logger.error(f"Error calling LLM API: {e}")
+            # Don't use fallbacks, just propagate the error
+            raise
         
-        logger.info(f"Raw LLM response: {result}")
+    def _extract_json_from_response(self, response):
+        """Extract JSON from LLM response"""
+        try:
+            # Try to parse the entire response as JSON
+            return json.loads(response)
+        except json.JSONDecodeError:
+            # If that fails, try to find JSON block in text
+            try:
+                # Look for JSON block between ``` markers
+                json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response)
+                if json_match:
+                    json_str = json_match.group(1)
+                    return json.loads(json_str)
+                
+                # Look for JSON block between { and }
+                json_match = re.search(r'({[\s\S]*})', response)
+                if json_match:
+                    json_str = json_match.group(1)
+                    return json.loads(json_str)
+            except Exception as e:
+                self.logger.error(f"Error extracting JSON from response: {e}")
+            
+            self.logger.error("Could not extract valid JSON from response")
+            return None
+
+    def parse_reminder(self, message, action_type=None):
+        """
+        Parse a reminder message and extract the relevant details.
         
-        # Parse the response
-        parsed_data = parse_json_response(result)
-        if not parsed_data:
-            raise ValueError("Failed to parse LLM response as JSON")
+        Args:
+            message (str): The reminder message to parse
+            action_type (dict, optional): Additional context, such as current_time
+            
+        Returns:
+            dict: The parsed reminder with title and scheduled_time
+            
+        Raises:
+            ValueError: If parsing fails or required data is missing
+            Exception: If any other error occurs during parsing
+        """
+        self.logger.info(f"STARTING parse_reminder with message: {message[:50]}...")
         
-        return parsed_data
+        # Extract current time context if provided
+        current_time = None
+        if action_type and 'current_time' in action_type:
+            current_time_str = action_type['current_time']
+            # Clean up the time string and parse it
+            current_time_str = re.sub(r'[^\w\s:/\-]', '', current_time_str)
+            self.logger.info(f"Current time string from action_type: '{current_time_str}'")
+            self.logger.info(f"Cleaned current time string: '{current_time_str}'")
+            try:
+                # Try various datetime formats
+                for fmt in ['%b/%d/%Y %H:%M', '%Y-%m-%d %H:%M:%S%z', '%Y-%m-%dT%H:%M:%S%z']:
+                    try:
+                        current_time = datetime.strptime(current_time_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+                
+                if not current_time:
+                    # Try another approach with dateutil parser
+                    current_time = parser.parse(current_time_str)
+                    
+                # Add timezone if missing
+                if current_time.tzinfo is None:
+                    current_time = BRAZIL_TZ.localize(current_time)
+                    
+                self.logger.info(f"Parsed current time: {current_time}")
+            except Exception as e:
+                error_msg = f"Failed to parse current time: {e}"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+        # Attempt to parse the reminder with LLM
+        self.logger.info("Attempting to parse with LLM")
+        try:
+            result = self._parse_with_llm(message, current_time)
+            self.logger.info(f"Raw LLM result: {result}")
+            
+            if not result:
+                error_msg = "LLM returned empty or None result"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+        except Exception as e:
+            error_msg = f"Error in _parse_with_llm: {e}"
+            self.logger.error(error_msg)
+            raise
+        
+        try:
+            # If we have reminders array and it's not empty, use the first one for title and time
+            if 'reminders' in result and result['reminders'] and len(result['reminders']) > 0:
+                first_reminder = result['reminders'][0]
+                
+                # Set the main title and time from the first reminder if not explicitly provided
+                if 'title' not in result or not result['title']:
+                    result['title'] = first_reminder.get('title', '')
+                    self.logger.info(f"Used first reminder's title: {result['title']}")
+                
+                if 'parsed_time' not in result or not result['parsed_time']:
+                    result['parsed_time'] = first_reminder.get('parsed_time', '')
+                    self.logger.info(f"Used first reminder's parsed_time: {result['parsed_time']}")
+            
+            # Check if we have required title and time
+            if 'title' not in result or not result['title']:
+                error_msg = "LLM result missing title and unable to extract from reminders"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            if 'parsed_time' not in result or not result['parsed_time']:
+                error_msg = "LLM result missing parsed_time and unable to extract from reminders"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+        
+            self.logger.info(f"Final LLM result after extraction: {result}")
+            
+            # Convert parsed time string to datetime object
+            reminder_data = result.copy()
+            try:
+                if 'parsed_time' in reminder_data and reminder_data['parsed_time']:
+                    scheduled_time = self._parse_time(reminder_data['parsed_time'], current_time)
+                    reminder_data['scheduled_time'] = scheduled_time
+                    del reminder_data['parsed_time']  # Remove the intermediate parsed_time
+                    self.logger.info(f"Converted main parsed_time to scheduled_time: {scheduled_time}")
+            except Exception as e:
+                error_msg = f"Failed to convert parsed time to datetime: {e}"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            # Handle multiple reminders if present
+            if 'reminders' in reminder_data and reminder_data['reminders']:
+                self.logger.info(f"Processing {len(reminder_data['reminders'])} sub-reminders")
+                for i, reminder in enumerate(reminder_data['reminders']):
+                    self.logger.info(f"Processing sub-reminder {i}: {reminder}")
+                    if 'parsed_time' in reminder and reminder['parsed_time']:
+                        try:
+                            scheduled_time = self._parse_time(reminder['parsed_time'], current_time)
+                            reminder_data['reminders'][i]['scheduled_time'] = scheduled_time
+                            del reminder_data['reminders'][i]['parsed_time']
+                            self.logger.info(f"Converted sub-reminder {i} parsed_time to scheduled_time: {scheduled_time}")
+                        except Exception as e:
+                            error_msg = f"Failed to convert parsed time for reminder {i}: {e}"
+                            self.logger.error(error_msg)
+                            raise ValueError(error_msg)
+            
+            self.logger.info(f"Reminder data after all parsing: {reminder_data}")
+            
+            # Convert datetime objects to ISO format strings
+            try:
+                reminder_data = self._convert_datetimes_to_iso(reminder_data)
+                self.logger.info(f"Reminder data after datetime conversion: {reminder_data}")
+            except Exception as e:
+                error_msg = f"Error converting datetimes to ISO: {e}"
+                self.logger.error(error_msg)
+                raise
+            
+            self.logger.info(f"FINAL RESULT BEING RETURNED: {reminder_data}")
+            return reminder_data
+        except Exception as e:
+            error_msg = f"Unexpected error in parse_reminder: {e}"
+            self.logger.error(error_msg)
+            # Re-raise the exception, don't return None
+            raise
+
+    def _convert_datetimes_to_iso(self, data):
+        """
+        Convert all datetime objects in data to ISO format strings
+        Only used as fallback if utils.datetime_utils is not available
+        """
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, datetime):
+                    data[key] = value.isoformat()
+                elif isinstance(value, (dict, list)):
+                    data[key] = self._convert_datetimes_to_iso(value)
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                if isinstance(item, datetime):
+                    data[i] = item.isoformat()
+                elif isinstance(item, (dict, list)):
+                    data[i] = self._convert_datetimes_to_iso(item)
+        return data
+
+class TimeAwareReminderAgent(ReminderAgent):
+    """
+    A version of ReminderAgent that allows overriding the current time for testing purposes.
+    This is primarily used for evaluation scripts.
+    """
+    def __init__(self, send_message_func=None, intent_classifier=None, api_key=None, current_time=None):
+        super().__init__(send_message_func)
+        self.current_time = current_time
+        
+    def parse_reminder(self, message, action_type):
+        """Override parse_reminder to use the specified current_time"""
+        self.logger.info(f"TimeAwareReminderAgent parsing reminder with custom time: {self.current_time}")
+        
+        # If we have a custom current_time, use it
+        if self.current_time:
+            # Make sure it's timezone-aware
+            if not self.current_time.tzinfo:
+                self.current_time = BRAZIL_TZ.localize(self.current_time)
+            
+            self.logger.info(f"Using custom time for parsing: {self.current_time.isoformat()}")
+            
+            # Call the LLM parser directly with our custom time
+            try:
+                llm_result = self._parse_with_llm(message, self.current_time)
+                self.logger.info(f"LLM parsing result with custom time: {llm_result}")
+                return llm_result
+            except Exception as e:
+                self.logger.error(f"Error in TimeAwareReminderAgent parse_reminder: {str(e)}")
+                return None
+        else:
+            # Fall back to the parent implementation if no custom time
+            return super().parse_reminder(message, action_type)

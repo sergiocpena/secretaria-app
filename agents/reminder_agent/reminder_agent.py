@@ -602,7 +602,41 @@ class ReminderAgent:
                     llm_result["parsed_time"] = format_time_exact(reminder_time)
                 
                 logger.info(f"Final LLM result: {llm_result}")
-                return llm_result
+                
+                # Extract title and time from LLM response
+                title = llm_result.get('title')
+                parsed_time_str = llm_result.get('parsed_time')
+                
+                logger.info(f"Reminder data after parsing: {llm_result}")
+                
+                # Ensure we have both title and time
+                if not title or not parsed_time_str:
+                    logger.warning(f"Missing title or time in LLM response: {llm_result}")
+                    return None
+                    
+                # Try to parse the time string into a datetime object
+                try:
+                    # First try with the expected format
+                    parsed_time = datetime.strptime(parsed_time_str, "%b/%d/%Y %H:%M %Z")
+                except ValueError:
+                    try:
+                        # Try alternative format without timezone
+                        parsed_time = datetime.strptime(parsed_time_str, "%b/%d/%Y %H:%M")
+                    except ValueError:
+                        # Try with more flexible parsing
+                        import dateutil.parser
+                        try:
+                            parsed_time = dateutil.parser.parse(parsed_time_str)
+                        except:
+                            logger.warning(f"Could not parse time string: {parsed_time_str}")
+                            return None
+                
+                # Create and return the reminder object
+                return {
+                    "title": title,
+                    "scheduled_time": parsed_time,
+                    "user_phone": self.user_phone
+                }
             except Exception as e:
                 logger.error(f"LLM parsing failed: {str(e)}. Using rule-based parsing.")
         else:

@@ -1,136 +1,115 @@
 """
-Media processing utility functions.
-This file provides functions for processing different types of media using AI.
+Media utilities for processing images and audio files.
 """
-import logging
 import os
+import logging
+import requests
+import tempfile
 import base64
-from utils.whatsapp_utils import download_media
-from utils.llm_utils import chat_completion, get_openai_client
+import openai
+from PIL import Image
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
 def process_image(image_url):
-    """Process an image using OpenAI's vision model"""
+    """
+    Process an image using OpenAI's vision model.
+    
+    Args:
+        image_url: URL of the image to process
+        
+    Returns:
+        str: Description of the image
+    """
     try:
-        logger.info(f"Processing image: {image_url}")
+        logger.info(f"Processing image from URL: {image_url}")
         
         # Download the image
-        image_data = download_media(image_url)
-        if not image_data:
-            raise Exception("Failed to download image")
+        response = requests.get(image_url)
+        if response.status_code != 200:
+            logger.error(f"Failed to download image: {response.status_code}")
+            return "Não consegui baixar a imagem."
         
-        # Convert to base64 for OpenAI API
-        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        # Convert to base64
+        image_data = base64.b64encode(response.content).decode('utf-8')
         
-        # Use the centralized chat_completion function
-        response = chat_completion(
+        # Use OpenAI API directly
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",  # Use a model with vision capabilities
             messages=[
                 {
                     "role": "system",
-                    "content": """Analyze the provided image in conjunction with the user's prompt, if available. Provide a thorough analysis of the image alone if no prompt is given.
-
-- When a prompt accompanies the image, tailor your analysis to address the user's specific request.
-- If the user's prompt is empty, offer a comprehensive analysis based solely on the image.
-
-# Steps
-
-1. **Receive Input:**
-   - Identify if both an image and a prompt are provided or if only the image is available.
-
-2. **Analyze Input:**
-   - If a prompt is provided, interpret the user's request and focus your analysis on fulfilling it.
-   - If no prompt is provided, perform an in-depth analysis of the image.
-
-3. **Synthesize Response:**
-   - For image-only inputs, construct a comprehensive and insightful analysis that covers key elements such as objects, context, emotions, and any significant details.
-   - For image with prompt inputs, ensure your response directly addresses the user's request.
-
-# Output Format
-
-- Response should be in paragraph form.
-- Detailed analysis should focus on readability and depth, ensuring a complete understanding of the image's contents.
-- Tailored responses to specific requests should be concise and relevant to the query.
-
-# Examples
-
-### Example 1:
-**Input:** 
-- Image: [Image of a sunset over the ocean]
-- Prompt: "Describe the mood."
-
-**Response:**
-- The image depicts a serene and tranquil mood. The warm hues of the sunset blending into the cool tones of the ocean create a relaxing atmosphere. The gentle waves and the fading light evoke a sense of peace and harmony, characteristic of a calm evening by the sea.
-
-### Example 2:
-**Input:**
-- Image: [Image of a crowded city street]
-- Prompt: [Empty]
-
-**Response:**
-- The image captures the bustling energy of a crowded city street. People in various attires move briskly along the sidewalks, each seemingly engrossed in their daily activities. The tall buildings, illuminated shop signs, and vibrant billboards add to the urban landscape's dynamic aura. This scene embodies the vibrant and fast-paced life typical of city centers.
-
-# Notes
-
-- Be creative and observant when interpreting images, considering emotional, cultural, and contextual elements.
-- Ensure clarity and engagement in your analysis, making it accessible to a broad audience."""
+                    "content": "Você é um assistente que descreve imagens em português do Brasil. Seja detalhado mas conciso."
                 },
                 {
-                    "role": "user", 
+                    "role": "user",
                     "content": [
-                        {"type": "text", "text": "What's in this image?"},
+                        {"type": "text", "text": "Descreva esta imagem em detalhes."},
                         {
-                            "type": "image_url", 
+                            "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_base64}"
+                                "url": f"data:image/jpeg;base64,{image_data}"
                             }
                         }
                     ]
                 }
             ],
-            model="gpt-4o",
-            temperature=0.7
+            max_tokens=300
         )
         
-        return response
+        description = response.choices[0].message.content
+        logger.info(f"Generated image description: {description[:100]}... (truncated)")
+        
+        return description
+        
     except Exception as e:
         logger.error(f"Error processing image: {str(e)}")
-        return "Desculpe, não consegui analisar esta imagem."
+        return "Ocorreu um erro ao processar a imagem."
 
 def transcribe_audio(audio_url):
-    """Transcribe an audio file using OpenAI's Whisper API"""
+    """
+    Transcribe audio using OpenAI's Whisper model.
+    
+    Args:
+        audio_url: URL of the audio file to transcribe
+        
+    Returns:
+        str: Transcription of the audio
+    """
     try:
-        logger.info(f"Transcribing audio: {audio_url}")
+        logger.info(f"Transcribing audio from URL: {audio_url}")
         
         # Download the audio file
-        audio_data = download_media(audio_url)
-        if not audio_data:
-            raise Exception("Failed to download audio")
+        response = requests.get(audio_url)
+        if response.status_code != 200:
+            logger.error(f"Failed to download audio: {response.status_code}")
+            return "Não consegui baixar o áudio."
         
         # Save to a temporary file
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
-            temp_file.write(audio_data)
-            temp_file_path = temp_file.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg') as temp_file:
+            temp_file.write(response.content)
+            temp_path = temp_file.name
         
-        # Use the OpenAI client from our utilities
-        client = get_openai_client()
+        try:
+            # Use OpenAI API directly
+            with open(temp_path, "rb") as audio_file:
+                transcript = openai.Audio.transcribe(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="pt"
+                )
+            
+            transcription = transcript.text
+            logger.info(f"Generated transcription: {transcription[:100]}... (truncated)")
+            
+            return transcription
+            
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
         
-        if not client:
-            raise Exception("OpenAI client not available")
-        
-        # Open the file and transcribe
-        with open(temp_file_path, 'rb') as audio_file:
-            transcription = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language="pt"
-            )
-        
-        # Clean up the temporary file
-        os.unlink(temp_file_path)
-        
-        return transcription.text
     except Exception as e:
         logger.error(f"Error transcribing audio: {str(e)}")
-        return "Desculpe, não consegui transcrever este áudio." 
+        return "Ocorreu um erro ao transcrever o áudio." 

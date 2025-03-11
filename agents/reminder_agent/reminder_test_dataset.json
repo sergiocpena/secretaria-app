@@ -2,51 +2,55 @@
     {
       "id": "case_1",
       "message": "Me lembra de pagar a babá daqui 2h",
-      "current_time": "2025-03-05T14:47:00-03:06",
-      "expected": {
+      "current_time": "2025-03-05T14:47:00-03:00",
+      "expected_result": {
         "title": "pagar a babá",
-        "parsed_time": "2025-03-05T16:47:00-03:06"
+        "scheduled_time": "2025-03-05T16:47:00-03:00"
       },
-      "description": "Regression test for 'daqui 2h' bug"
+      "description": "Basic reminder with relative time (2 hours from now)"
     },
     {
       "id": "case_2",
       "message": "Me lembra de ligar para o médico amanhã às 10h",
-      "current_time": "2025-03-05T14:47:00-03:06",
-      "expected": {
+      "current_time": "2025-03-05T14:47:00-03:00",
+      "expected_result": {
         "title": "ligar para o médico",
-        "parsed_time": "2025-03-06T10:00:00-03:06"
+        "scheduled_time": "2025-03-06T10:00:00-03:00"
       },
-      "description": "Test for absolute time on next day"
+      "description": "Reminder for tomorrow at a specific time"
     },
     {
       "id": "case_3",
       "message": "Daqui 30 minutos me lembra de tirar a roupa da máquina",
-      "current_time": "2025-03-05T14:47:00-03:06",
-      "expected": {
+      "current_time": "2025-03-05T14:47:00-03:00",
+      "expected_result": {
         "title": "tirar a roupa da máquina",
-        "parsed_time": "2025-03-05T15:17:00-03:06"
+        "scheduled_time": "2025-03-05T15:17:00-03:00"
       },
-      "description": "Test for minutes-based relative time"
+      "description": "Reminder with relative time (30 minutes from now)"
     },
     {
       "id": "case_4",
       "message": "Me lembra de:\n-pagar a conta de luz amanhã as 10\n-levar o cachorro no pet shop dia 7 as 8h\n-ir na padaria daqui 3h",
-      "current_time": "2025-03-05T14:47:00-03:06",
-      "expected": [
-        {
-          "title": "pagar a conta de luz",
-          "parsed_time": "2025-03-06T10:00:00-03:06"
-        },
-        {
-          "title": "levar o cachorro no pet shop",
-          "parsed_time": "2025-03-07T08:00:00-03:06"
-        },
-        {
-          "title": "ir na padaria",
-          "parsed_time": "2025-03-05T17:47:00-03:06"
-        }
-      ],
-      "description": "Test for multiple reminders in a single message"
+      "current_time": "2025-03-05T14:47:00-03:00",
+      "expected_result": {
+        "title": "pagar a conta de luz",
+        "scheduled_time": "2025-03-06T10:00:00-03:00",
+        "reminders": [
+          {
+            "title": "pagar a conta de luz",
+            "scheduled_time": "2025-03-06T10:00:00-03:00"
+          },
+          {
+            "title": "levar o cachorro no pet shop",
+            "scheduled_time": "2025-03-07T08:00:00-03:00"
+          },
+          {
+            "title": "ir na padaria",
+            "scheduled_time": "2025-03-05T17:47:00-03:00"
+          }
+        ]
+      },
+      "description": "Multiple reminders in a single message"
     }
   ]

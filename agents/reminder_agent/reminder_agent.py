@@ -23,6 +23,27 @@ logger = logging.getLogger("ReminderAgent")
 # Get a consistent timezone to use throughout the agent
 BRAZIL_TZ = pytz.timezone('America/Sao_Paulo')
 
+# Create a prefixed logger class
+class PrefixedLogger:
+    def __init__(self, logger, prefix):
+        self.logger = logger
+        self.prefix = prefix
+        
+    def info(self, message, *args, **kwargs):
+        self.logger.info(f"{self.prefix} {message}", *args, **kwargs)
+        
+    def warning(self, message, *args, **kwargs):
+        self.logger.warning(f"{self.prefix} {message}", *args, **kwargs)
+        
+    def error(self, message, *args, **kwargs):
+        self.logger.error(f"{self.prefix} {message}", *args, **kwargs)
+    
+    def debug(self, message, *args, **kwargs):
+        self.logger.debug(f"{self.prefix} {message}", *args, **kwargs)
+        
+    def critical(self, message, *args, **kwargs):
+        self.logger.critical(f"{self.prefix} {message}", *args, **kwargs)
+
 class ReminderAgent:
     def __init__(self, send_message_func=None):
         """
@@ -31,7 +52,8 @@ class ReminderAgent:
         Args:
             send_message_func (callable, optional): Function to send messages back to the user
         """
-        self.logger = logging.getLogger(__name__)
+        base_logger = logging.getLogger(__name__)
+        self.logger = PrefixedLogger(base_logger, "ReminderAgent:")
         self.send_message_func = send_message_func
         
         # Rest of initialization code

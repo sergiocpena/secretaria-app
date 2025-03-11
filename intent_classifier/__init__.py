@@ -1,3 +1,0 @@
-"""
-Intent classification package.
-"""

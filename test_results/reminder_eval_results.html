@@ -4,283 +4,212 @@
     <head>
         <title>Reminder Agent Evaluation Results</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            h1, h2, h3 { color: #333; }
-            table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
-            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
+            body {
+                font-family: Arial, sans-serif;
+                margin: 20px;
+                line-height: 1.6;
+            }
+            h1 {
+                color: #2c3e50;
+                border-bottom: 2px solid #eee;
+                padding-bottom: 10px;
+            }
+            .summary {
+                background-color: #f8f9fa;
+                border-left: 4px solid #5bc0de;
+                padding: 10px 15px;
+                margin-bottom: 20px;
+                display: flex;
+                justify-content: space-between;
+                flex-wrap: wrap;
+            }
+            .summary-item {
+                margin-right: 20px;
+                margin-bottom: 5px;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+                font-size: 13px;
+                table-layout: fixed; /* Fixed layout for better control */
+            }
+            th, td {
+                padding: 8px 10px;
+                border-bottom: 1px solid #ddd;
+                text-align: left;
+                word-wrap: break-word; /* Allow words to break */
+                overflow: hidden;
+            }
+            th {
+                background-color: #f8f9fa;
+                font-weight: bold;
+            }
+            th:nth-child(1) { width: 3%; } /* # column */
+            th:nth-child(2) { width: 20%; } /* Inputs column */
+            th:nth-child(3) { width: 20%; } /* Expected column */
+            th:nth-child(4) { width: 20%; } /* Actual column */
+            th:nth-child(5) { width: 20%; } /* Explanation column */
+            th:nth-child(6) { width: 7%; } /* Result column */
+            th:nth-child(7) { width: 10%; } /* Error column */
             
-            /* Tab styles */
-            .tab { overflow: hidden; border: 1px solid #ccc; background-color: #f1f1f1; margin-bottom: 20px; }
-            .tab button { background-color: inherit; float: left; border: none; outline: none; cursor: pointer; padding: 14px 16px; transition: 0.3s; }
-            .tab button:hover { background-color: #ddd; }
-            .tab button.active { background-color: #ccc; }
-            .tabcontent { display: none; padding: 6px 12px; border: 1px solid #ccc; border-top: none; }
-            #Overview { display: block; }
-            
-            /* Table row styles */
-            .success { background-color: #dff0d8; }
-            .danger { background-color: #f2dede; }
-            
-            /* Detailed view styles */
-            .details-container { margin-bottom: 30px; border: 1px solid #ddd; border-radius: 5px; overflow: hidden; }
-            .details-success { border-left: 8px solid #5cb85c; }
-            .details-danger { border-left: 8px solid #d9534f; }
-            .details-header { padding: 15px; background-color: #fff; }
-            .details-message { padding: 0 15px; margin: 10px 0; }
-            .details-section { padding: 15px; margin: 0; }
-            .details-code { background-color: #f5f5f5; padding: 15px; margin: 0; font-family: monospace; white-space: pre-wrap; }
-            .details-reasoning { background-color: #fcf8e3; padding: 15px; margin: 0; }
-            .section-label { font-weight: bold; margin-bottom: 5px; display: block; }
-            .summary { margin: 20px 0; }
-            .execution-time { color: #666; font-style: italic; margin-bottom: 20px; }
+            .success td {
+                background-color: #f0fff0;
+            }
+            .failure td {
+                background-color: #fff0f0;
+            }
+            pre {
+                background-color: #f8f9fa;
+                padding: 6px;
+                border-radius: 4px;
+                overflow-x: auto;
+                font-size: 12px; /* Smaller font for code */
+                max-height: 120px; /* Limit height with scroll */
+                margin: 0;
+            }
+            /* Make the table responsive */
+            @media screen and (max-width: 1200px) {
+                table {
+                    font-size: 12px;
+                }
+                th, td {
+                    padding: 6px 8px;
+                }
+                pre {
+                    font-size: 11px;
+                    padding: 4px;
+                }
+            }
         </style>
     </head>
     <body>
         <h1>Reminder Agent Evaluation Results</h1>
-        <div class="execution-time">Report generated on: 2025-03-05 19:35:18</div>
-        
-        <div class="tab">
-            <button class="tablinks active" onclick="openTab(event, 'Overview')">Overview</button>
-            <button class="tablinks" onclick="openTab(event, 'Details')">Detailed Results</button>
+        <div class="summary">
+            <div class="summary-item"><strong>Tests:</strong> 4 total, 0 passed, 4 failed</div>
+            <div class="summary-item"><strong>Success rate:</strong> 0.00%</div>
+            <div class="summary-item"><strong>Execution time:</strong> 2025-03-11 10:43:05</div>
         </div>
-        
-        <div id="Overview" class="tabcontent">
-            <div class="summary">
-                <h2>Summary</h2>
-                <p>Total test cases: 4</p>
-                <p>Passed: 4 (100.0%)</p>
-                <p>Failed: 0 (0.0%)</p>
-            </div>
-            
-            <h2>Results Overview</h2>
-            <table>
+        <table>
+            <thead>
                 <tr>
-                    <th>ID</th>
-                    <th>Message</th>
-                    <th>Current Time</th>
+                    <th>#</th>
+                    <th>Inputs</th>
                     <th>Expected</th>
                     <th>Actual</th>
-                    <th>Status</th>
+                    <th>Explanation</th>
+                    <th>Result</th>
+                    <th>Error</th>
                 </tr>
-    
-                <tr class="success">
-                    <td>case_1</td>
-                    <td>Me lembra de pagar a babá daqui 2h</td>
-                    <td>2025-03-05T14:47:00-03:06</td>
-                    <td>pagar a babá at 2025-03-05T16:47:00-03:06</td>
-                    <td>pagar a babá at Mar/5/2025 16:47 BRT</td>
-                    <td>PASSED</td>
-                </tr>
-        
-                <tr class="success">
-                    <td>case_2</td>
-                    <td>Me lembra de ligar para o médico amanhã às 10h</td>
-                    <td>2025-03-05T14:47:00-03:06</td>
-                    <td>ligar para o médico at 2025-03-06T10:00:00-03:06</td>
-                    <td>ligar para o médico at Mar/6/2025 10:00 BRT</td>
-                    <td>PASSED</td>
-                </tr>
-        
-                <tr class="success">
-                    <td>case_3</td>
-                    <td>Daqui 30 minutos me lembra de tirar a roupa da máquina</td>
-                    <td>2025-03-05T14:47:00-03:06</td>
-                    <td>tirar a roupa da máquina at 2025-03-05T15:17:00-03:06</td>
-                    <td>tirar a roupa da máquina at Mar/5/2025 15:17 BRT</td>
-                    <td>PASSED</td>
-                </tr>
-        
-                <tr class="success">
-                    <td>case_4</td>
-                    <td>Me lembra de:
--pagar a conta de luz amanhã as 10
--levar o cachorro no pet shop dia 7 as 8h
--ir na padaria daqui 3h</td>
-                    <td>2025-03-05T14:47:00-03:06</td>
-                    <td><ul><li>pagar a conta de luz at 2025-03-06T10:00:00-03:06</li><li>levar o cachorro no pet shop at 2025-03-07T08:00:00-03:06</li><li>ir na padaria at 2025-03-05T17:47:00-03:06</li></ul></td>
-                    <td><ul><li>pagar a conta de luz at Mar/6/2025 10:00 BRT</li><li>levar o cachorro no pet shop at Mar/7/2025 08:00 BRT</li><li>ir na padaria at Mar/5/2025 17:47 BRT</li></ul></td>
-                    <td>PASSED</td>
-                </tr>
-        
-            </table>
-        </div>
-        
-        <div id="Details" class="tabcontent">
-            <h2>Detailed Test Results</h2>
-    
-            <div class="details-container details-success">
-                <div class="details-header">
-                    <h3>case_1 - ✓ PASSED</h3>
-                </div>
+            </thead>
+            <tbody>
                 
-                <div class="details-message">
-                    <span class="section-label">Message:</span> Me lembra de pagar a babá daqui 2h
-                </div>
-                
-                <div class="details-section">
-                    <span class="section-label">Expected:</span>
-                </div>
-                <pre class="details-code">{
+        <tr class="failure">
+            <td>1</td>
+            <td><pre>{
+  "message": "Me lembra de pagar a bab\u00e1 daqui 2h",
+  "current_time": "2025-03-05T14:47:00-03:00"
+}</pre></td>
+            <td><pre>{
   "title": "pagar a bab\u00e1",
-  "parsed_time": "2025-03-05T16:47:00-03:06"
-}</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Actual:</span>
-                </div>
-                <pre class="details-code">{
+  "scheduled_time": "2025-03-05T16:47:00-03:00"
+}</pre></td>
+            <td><pre>{
   "title": "pagar a bab\u00e1",
-  "parsed_time": "Mar/5/2025 16:47 BRT"
-}</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Reasoning:</span>
-                </div>
-                <div class="details-reasoning">Title match: True, Time match: False<br><br>Expected: pagar a babá at 2025-03-05T16:47:00-03:06<br>Actual: pagar a babá at Mar/5/2025 16:47 BRT</div>
-            </div>
+  "scheduled_time": "2025-03-11T12:42:55-03:00"
+}</pre></td>
+            <td>The titles match as they both refer to paying the babysitter. However, the time does not match as the actual reminder is scheduled for March 11th, which is not within 2 hours as requested in the original message.</td>
+            <td>❌ FAIL</td>
+            <td>Time mismatch</td>
+        </tr>
         
-            <div class="details-container details-success">
-                <div class="details-header">
-                    <h3>case_2 - ✓ PASSED</h3>
-                </div>
-                
-                <div class="details-message">
-                    <span class="section-label">Message:</span> Me lembra de ligar para o médico amanhã às 10h
-                </div>
-                
-                <div class="details-section">
-                    <span class="section-label">Expected:</span>
-                </div>
-                <pre class="details-code">{
+        <tr class="failure">
+            <td>2</td>
+            <td><pre>{
+  "message": "Me lembra de ligar para o m\u00e9dico amanh\u00e3 \u00e0s 10h",
+  "current_time": "2025-03-05T14:47:00-03:00"
+}</pre></td>
+            <td><pre>{
   "title": "ligar para o m\u00e9dico",
-  "parsed_time": "2025-03-06T10:00:00-03:06"
-}</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Actual:</span>
-                </div>
-                <pre class="details-code">{
+  "scheduled_time": "2025-03-06T10:00:00-03:00"
+}</pre></td>
+            <td><pre>{
   "title": "ligar para o m\u00e9dico",
-  "parsed_time": "Mar/6/2025 10:00 BRT"
-}</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Reasoning:</span>
-                </div>
-                <div class="details-reasoning">Title match: True, Time match: False<br><br>Expected: ligar para o médico at 2025-03-06T10:00:00-03:06<br>Actual: ligar para o médico at Mar/6/2025 10:00 BRT</div>
-            </div>
+  "scheduled_time": "2025-03-12T10:00:00-03:00"
+}</pre></td>
+            <td>The titles match as both refer to 'ligar para o médico' (call the doctor). However, the time does not match as the actual reminder is set for March 12th instead of March 6th as expected.</td>
+            <td>❌ FAIL</td>
+            <td>Time mismatch</td>
+        </tr>
         
-            <div class="details-container details-success">
-                <div class="details-header">
-                    <h3>case_3 - ✓ PASSED</h3>
-                </div>
-                
-                <div class="details-message">
-                    <span class="section-label">Message:</span> Daqui 30 minutos me lembra de tirar a roupa da máquina
-                </div>
-                
-                <div class="details-section">
-                    <span class="section-label">Expected:</span>
-                </div>
-                <pre class="details-code">{
+        <tr class="failure">
+            <td>3</td>
+            <td><pre>{
+  "message": "Daqui 30 minutos me lembra de tirar a roupa da m\u00e1quina",
+  "current_time": "2025-03-05T14:47:00-03:00"
+}</pre></td>
+            <td><pre>{
   "title": "tirar a roupa da m\u00e1quina",
-  "parsed_time": "2025-03-05T15:17:00-03:06"
-}</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Actual:</span>
-                </div>
-                <pre class="details-code">{
+  "scheduled_time": "2025-03-05T15:17:00-03:00"
+}</pre></td>
+            <td><pre>{
   "title": "tirar a roupa da m\u00e1quina",
-  "parsed_time": "Mar/5/2025 15:17 BRT"
-}</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Reasoning:</span>
-                </div>
-                <div class="details-reasoning">Title match: True, Time match: False<br><br>Expected: tirar a roupa da máquina at 2025-03-05T15:17:00-03:06<br>Actual: tirar a roupa da máquina at Mar/5/2025 15:17 BRT</div>
-            </div>
+  "scheduled_time": "2025-03-11T11:13:00-03:00"
+}</pre></td>
+            <td>The titles match as they both refer to 'tirar a roupa da máquina'. However, the time does not match as the actual reminder is scheduled for March 11th, which is significantly different from the expected time of March 5th.</td>
+            <td>❌ FAIL</td>
+            <td>Time mismatch</td>
+        </tr>
         
-            <div class="details-container details-success">
-                <div class="details-header">
-                    <h3>case_4 - ✓ PASSED</h3>
-                </div>
-                
-                <div class="details-message">
-                    <span class="section-label">Message:</span> Me lembra de:
--pagar a conta de luz amanhã as 10
--levar o cachorro no pet shop dia 7 as 8h
--ir na padaria daqui 3h
-                </div>
-                
-                <div class="details-section">
-                    <span class="section-label">Expected:</span>
-                </div>
-                <pre class="details-code">[
-  {
-    "title": "pagar a conta de luz",
-    "parsed_time": "2025-03-06T10:00:00-03:06"
-  },
-  {
-    "title": "levar o cachorro no pet shop",
-    "parsed_time": "2025-03-07T08:00:00-03:06"
-  },
-  {
-    "title": "ir na padaria",
-    "parsed_time": "2025-03-05T17:47:00-03:06"
-  }
-]</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Actual:</span>
-                </div>
-                <pre class="details-code">{
+        <tr class="failure">
+            <td>4</td>
+            <td><pre>{
+  "message": "Me lembra de:\n-pagar a conta de luz amanh\u00e3 as 10\n-levar o cachorro no pet shop dia 7 as 8h\n-ir na padaria daqui 3h",
+  "current_time": "2025-03-05T14:47:00-03:00"
+}</pre></td>
+            <td><pre>{
+  "title": "pagar a conta de luz",
+  "scheduled_time": "2025-03-06T10:00:00-03:00",
   "reminders": [
     {
       "title": "pagar a conta de luz",
-      "parsed_time": "Mar/6/2025 10:00 BRT"
+      "scheduled_time": "2025-03-06T10:00:00-03:00"
     },
     {
       "title": "levar o cachorro no pet shop",
-      "parsed_time": "Mar/7/2025 08:00 BRT"
+      "scheduled_time": "2025-03-07T08:00:00-03:00"
     },
     {
       "title": "ir na padaria",
-      "parsed_time": "Mar/5/2025 17:47 BRT"
+      "scheduled_time": "2025-03-05T17:47:00-03:00"
     }
   ]
-}</pre>
-                
-                <div class="details-section">
-                    <span class="section-label">Reasoning:</span>
-                </div>
-                <div class="details-reasoning">Match details:<br><br>Reminder #1:<br>- Expected: pagar a conta de luz at 2025-03-06T10:00:00-03:06<br>- Actual: pagar a conta de luz at Mar/6/2025 10:00 BRT<br>- Title match: True, Time match: True<br><br>Reminder #2:<br>- Expected: levar o cachorro no pet shop at 2025-03-07T08:00:00-03:06<br>- Actual: levar o cachorro no pet shop at Mar/7/2025 08:00 BRT<br>- Title match: True, Time match: True<br><br>Reminder #3:<br>- Expected: ir na padaria at 2025-03-05T17:47:00-03:06<br>- Actual: ir na padaria at Mar/5/2025 17:47 BRT<br>- Title match: True, Time match: True<br></div>
-            </div>
+}</pre></td>
+            <td><pre>{
+  "title": "Lembrete",
+  "scheduled_time": "2025-03-12T12:00:00-03:00",
+  "reminders": [
+    {
+      "title": "pagar a conta de luz",
+      "scheduled_time": "2025-03-12T10:00:00-03:00"
+    },
+    {
+      "title": "levar o cachorro no pet shop",
+      "scheduled_time": "2025-03-12T12:00:00-03:00"
+    },
+    {
+      "title": "ir na padaria",
+      "scheduled_time": "2025-03-11T13:43:02-03:00"
+    }
+  ]
+}</pre></td>
+            <td>The titles do not match as the expected reminder is about paying the electricity bill, while the actual reminder just says 'Lembrete'. The times also do not match, with a significant difference in both the date and time.</td>
+            <td>❌ FAIL</td>
+            <td>Both title and time mismatch</td>
+        </tr>
         
-        </div>
-        
-        <script>
-            function openTab(evt, tabName) {
-                var i, tabcontent, tablinks;
-                
-                // Hide all tab content
-                tabcontent = document.getElementsByClassName("tabcontent");
-                for (i = 0; i < tabcontent.length; i++) {
-                    tabcontent[i].style.display = "none";
-                }
-                
-                // Remove "active" class from all tab buttons
-                tablinks = document.getElementsByClassName("tablinks");
-                for (i = 0; i < tablinks.length; i++) {
-                    tablinks[i].className = tablinks[i].className.replace(" active", "");
-                }
-                
-                // Show the selected tab and add "active" class to the button
-                document.getElementById(tabName).style.display = "block";
-                evt.currentTarget.className += " active";
-            }
-        </script>
+            </tbody>
+        </table>
     </body>
     </html>
     

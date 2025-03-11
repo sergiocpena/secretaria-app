@@ -46,142 +46,6 @@ import time
 import webbrowser
 from agents.reminder_agent.reminder_agent import TimeAwareReminderAgent
 
-@contextmanager
-def time_machine(target_time):
-    """Context manager to temporarily override time-related functions"""
-    # Store original functions
-    original_time_time = time.time
-    
-    # Create a mock time function
-    def mock_time():
-        return target_time.timestamp()
-    
-    # Create patches dictionary to track what we've patched
-    patches = {}
-    
-    try:
-        # Patch time.time()
-        time.time = mock_time
-        patches['time.time'] = True
-        
-        # Try to patch datetime in the reminder_agent module
-        try:
-            from agents.reminder_agent import reminder_agent
-            import datetime as dt
-            
-            # Create a MockDatetime class
-            class MockDatetime(dt.datetime):
-                @classmethod
-                def now(cls, tz=None):
-                    if tz:
-                        return target_time.astimezone(tz)
-                    return target_time
-            
-            # Only patch if the module has datetime attribute
-            if hasattr(reminder_agent, 'datetime'):
-                patches['reminder_agent.datetime'] = reminder_agent.datetime
-                reminder_agent.datetime = MockDatetime
-        except (ImportError, AttributeError) as e:
-            print(f"Note: Could not patch datetime in reminder_agent module: {e}")
-            # Continue even if we can't patch this
-            pass
-        
-        # Yield control back to the caller
-        yield
-    finally:
-        # Restore original functions
-        time.time = original_time_time
-        
-        # Restore any other patches we made
-        try:
-            from agents.reminder_agent import reminder_agent
-            if 'reminder_agent.datetime' in patches:
-                reminder_agent.datetime = patches['reminder_agent.datetime']
-        except (ImportError, AttributeError):
-            pass
-
-class TimeAwareReminderAgent:
-    """Wrapper for ReminderAgent that enables testing with controlled time"""
-    
-    def __init__(self, reminder_agent):
-        self.reminder_agent = reminder_agent
-        self.current_time = None
-    
-    def set_current_time(self, current_time):
-        """Set the current time for testing"""
-        self.current_time = current_time
-    
-    def parse_reminder(self, message, action_type=None):
-        """Parse a reminder message with the injected current time"""
-        # Ensure action_type is a dictionary
-        if action_type is None:
-            action_type = {}
-        elif not isinstance(action_type, dict):
-            action_type = {"action_type": action_type}
-        
-        # Inject the current time into the action_type
-        if self.current_time:
-            # Format the current time in the expected format
-            action_type["current_time"] = self.current_time.strftime("%b/%d/%Y %H:%M")
-        
-        # Call the underlying reminder agent
-        result = self.reminder_agent.parse_reminder(message, action_type)
-        
-        # Handle the case where the result contains a 'reminders' array
-        if result and 'reminders' in result and isinstance(result['reminders'], list):
-            # For case_4, return the full list of reminders
-            if len(result['reminders']) > 1:
-                reminders_list = []
-                for reminder in result['reminders']:
-                    # Convert parsed_time to scheduled_time
-                    if 'parsed_time' in reminder:
-                        # Parse the time string
-                        time_str = reminder['parsed_time']
-                        try:
-                            # Use the BRT timezone info
-                            tzinfos = {"BRT": -3 * 3600}  # BRT is UTC-3
-                            from dateutil import parser
-                            dt = parser.parse(time_str, tzinfos=tzinfos)
-                            reminder['scheduled_time'] = dt
-                            del reminder['parsed_time']
-                        except Exception as e:
-                            print(f"Error parsing time: {e}")
-                    reminders_list.append(reminder)
-                return reminders_list
-            # For single reminder in a reminders array, return just that reminder
-            elif len(result['reminders']) == 1:
-                reminder = result['reminders'][0]
-                # Convert parsed_time to scheduled_time
-                if 'parsed_time' in reminder:
-                    # Parse the time string
-                    time_str = reminder['parsed_time']
-                    try:
-                        # Use the BRT timezone info
-                        tzinfos = {"BRT": -3 * 3600}  # BRT is UTC-3
-                        from dateutil import parser
-                        dt = parser.parse(time_str, tzinfos=tzinfos)
-                        reminder['scheduled_time'] = dt
-                        del reminder['parsed_time']
-                    except Exception as e:
-                        print(f"Error parsing time: {e}")
-                return reminder
-        
-        # For regular single reminder results
-        if result and 'parsed_time' in result:
-            # Convert parsed_time to scheduled_time
-            time_str = result['parsed_time']
-            try:
-                # Use the BRT timezone info
-                tzinfos = {"BRT": -3 * 3600}  # BRT is UTC-3
-                from dateutil import parser
-                dt = parser.parse(time_str, tzinfos=tzinfos)
-                result['scheduled_time'] = dt
-                del result['parsed_time']
-            except Exception as e:
-                print(f"Error parsing time: {e}")
-        
-        return result
-
 def compare_reminders_with_llm(expected, actual, message):
     """Compare expected and actual reminder results using LLM"""
     if not actual:
@@ -282,14 +146,10 @@ def evaluate_test_case(agent, test_case, case_number=None):
             print(f"Current time: {current_time}")
         except ValueError:
             print(f"Warning: Invalid datetime format in test case: {datetime_str}")
-    
-    # Create a time-aware reminder agent for testing
-    time_aware_agent = TimeAwareReminderAgent(agent)
-    if current_time:
-        time_aware_agent.set_current_time(current_time)
+
     
     # Call LLM to parse the reminder
-    result = time_aware_agent.parse_reminder(message)
+    result = agent.parse_reminder(message)
     
     # Convert result to expected format
     if result and 'title' in result and 'scheduled_time' in result:

@@ -1,12 +1,11 @@
 """
 Intent classification module.
-This file contains the IntentClassifier class for detecting different types of intents in messages.
+This file contains the IntentAgent class for detecting different types of intents in messages.
 """
 import logging
 import json
 import openai
 import time as time_module
-from utils.llm_utils import chat_completion, parse_json_response
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +16,7 @@ class IntentAgent:
     """
     
     def __init__(self):
-        """Initialize the IntentClassifier"""
+        """Initialize the IntentAgent"""
         pass
     
     def detect_intent(self, message):
@@ -62,26 +61,29 @@ class IntentAgent:
             
             start_time = time_module.time()
             
-            # Use the centralized LLM utility
-            response_text = chat_completion(
+            # Use OpenAI's chat completion directly
+            response = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message}
                 ],
-                model="gpt-4o-mini",
                 temperature=0.1,
                 response_format={"type": "json_object"}
             )
             
             elapsed_time = time_module.time() - start_time
             
-            if not response_text:
+            if not response.choices or not response.choices[0].message.content:
                 logger.error("IntentAgent: Failed to get response from LLM")
                 raise ValueError("IntentAgent: Failed to get response from LLM")
             
+            response_text = response.choices[0].message.content
+            
             # Parse the JSON response
-            result = parse_json_response(response_text)
-            if not result:
+            try:
+                result = json.loads(response_text)
+            except json.JSONDecodeError:
                 logger.error("IntentAgent: Failed to parse LLM response as JSON")
                 raise ValueError("IntentAgent: Failed to parse LLM response as JSON")
             
@@ -89,7 +91,7 @@ class IntentAgent:
             
             intent_type = result.get("intent_type")
             
-            return intent_type
+            return intent_type, None  # Return both intent_type and intent_details (None for now)
             
         except Exception as e:
             logger.error(f"IntentAgent: Error in LLM intent detection: {str(e)}")

@@ -22,7 +22,7 @@ from agents.reminder_agent.reminder_db import (
 )
 from agents.general_agent.general_agent import get_ai_response, handle_message, get_conversation_context
 from agents.reminder_agent.reminder_agent import ReminderAgent
-from intent_classifier.classifier import IntentClassifier
+from agents.intent_agent import IntentAgent
 from utils.whatsapp_utils import (
     parse_twilio_request, send_whatsapp_message, start_message_sender,
     webhook_handler, send_direct_message_handler, process_message_async
@@ -64,7 +64,7 @@ if not initialize_openai(os.getenv('OPENAI_API_KEY')):
     logger.error("Failed to initialize OpenAI client. Some features may not work.")
 
 # Initialize the classifier
-intent_classifier = IntentClassifier()
+intent_agent = IntentAgent()
 
 # Initialize the ReminderAgent
 reminder_agent = ReminderAgent(send_message_func=send_whatsapp_message)
@@ -103,7 +103,7 @@ def start_self_ping():
 def process_message_wrapper(from_number, body, num_media, form_values):
     process_message_async(
         from_number, body, num_media, form_values,
-        intent_classifier, reminder_agent, handle_message, 
+        intent_agent, reminder_agent, handle_message, 
         get_ai_response, process_image, transcribe_audio
     )
 

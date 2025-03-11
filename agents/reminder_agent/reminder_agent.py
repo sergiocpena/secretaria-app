@@ -1,653 +1,399 @@
-import json
-from datetime import datetime, timezone, timedelta
-import pytz
-import os
-import re
+"""
+Reminder agent implementation.
+This file contains the ReminderAgent class for handling reminder-related functionality.
+"""
 import logging
-from utils.datetime_utils import format_time_exact
-from utils.llm_utils import get_openai_client, chat_completion, parse_json_response
-from dateutil import parser
-from pytz import timezone as pytz_timezone
+import threading
+import time
+import json
+import openai
+from datetime import datetime, timedelta
 
-# Import reminder DB functions
 from agents.reminder_agent.reminder_db import (
-    list_reminders, create_reminder, cancel_reminder,
+    list_reminders, create_reminder, cancel_reminder, 
+    get_pending_reminders, get_late_reminders,
     format_reminder_list_by_time, format_created_reminders,
-    format_datetime, BRAZIL_TIMEZONE
+    to_local_timezone, to_utc_timezone, format_datetime,
+    BRAZIL_TIMEZONE
 )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("ReminderAgent")
+logger = logging.getLogger(__name__)
 
-# Get a consistent timezone to use throughout the agent
-BRAZIL_TZ = pytz.timezone('America/Sao_Paulo')
-
-# Create a prefixed logger class
-class PrefixedLogger:
-    def __init__(self, logger, prefix):
-        self.logger = logger
-        self.prefix = prefix
-        
-    def info(self, message, *args, **kwargs):
-        self.logger.info(f"{self.prefix} {message}", *args, **kwargs)
-        
-    def warning(self, message, *args, **kwargs):
-        self.logger.warning(f"{self.prefix} {message}", *args, **kwargs)
-        
-    def error(self, message, *args, **kwargs):
-        self.logger.error(f"{self.prefix} {message}", *args, **kwargs)
-    
-    def debug(self, message, *args, **kwargs):
-        self.logger.debug(f"{self.prefix} {message}", *args, **kwargs)
-        
-    def critical(self, message, *args, **kwargs):
-        self.logger.critical(f"{self.prefix} {message}", *args, **kwargs)
+# Add this function to replace parse_json_response
+def parse_json_response(response_text):
+    """Parse a JSON response from the LLM"""
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON response: {str(e)}")
+        return None
 
 class ReminderAgent:
-    def __init__(self, send_message_func=None):
-        """
-        Initialize the ReminderAgent.
-        
-        Args:
-            send_message_func (callable, optional): Function to send messages back to the user
-        """
-        base_logger = logging.getLogger(__name__)
-        self.logger = PrefixedLogger(base_logger, "ReminderAgent:")
+    """Agent for handling reminder-related functionality"""
+    
+    def __init__(self, send_message_func=None, check_interval=60):
+        """Initialize the ReminderAgent"""
         self.send_message_func = send_message_func
-        
-        # Rest of initialization code
-        self.logger.info("ReminderAgent initialized")
-        
-    def handle_reminder_intent(self, text, intent=None, action_type=None, user_id=None):
+        self.check_interval = check_interval
+        self.stop_event = threading.Event()
+    
+    def extract_reminder_details(self, message):
         """
-        Handle a reminder intent
-        
-        Args:
-            text (str): The reminder text
-            intent (str, optional): The specific reminder intent (e.g., 'criar', 'listar', 'deletar')
-            action_type (dict, optional): Additional context for the action
-            user_id (str, optional): The user ID
+        Extract reminder details from a message using LLM.
+        """
+        try:
+            logger.info(f"Extracting reminder details from message: '{message[:50]}...' (truncated)")
             
-        Returns:
-            tuple: (success, response_message)
-        """
-        normalized_text = text.lower().strip()
-        self.logger.info(f"Processing reminder intent with normalized text: '{normalized_text}'")
-        
-        # Default to 'create' intent if not specified
-        if not intent:
-            intent = 'criar'
-        
-        if intent == 'criar':
-            self.logger.info("Detected create reminder request")
-            try:
-                # Parse the reminder text to extract details
-                reminder_data = self.parse_reminder(normalized_text, action_type)
-                
-                if not reminder_data:
-                    self.logger.warning("parse_reminder returned None")
-                    return False, "❌ Não consegui entender os detalhes do lembrete. Por favor, tente novamente."
-                
-                self.logger.info(f"Reminder data after parsing: {reminder_data}")
-                
-                # Handle reminders array if present
-                if 'reminders' in reminder_data and isinstance(reminder_data['reminders'], list) and reminder_data['reminders']:
-                    success_count = 0
-                    failed_count = 0
-                    
-                    for reminder in reminder_data['reminders']:
-                        try:
-                            # Each reminder in the array should have title and scheduled_time
-                            if 'title' not in reminder or 'scheduled_time' not in reminder:
-                                self.logger.warning(f"Reminder missing required fields: {reminder}")
-                                failed_count += 1
-                                continue
-                            
-                            # Create the reminder
-                            reminder_id, scheduled_iso = self.create_reminder(
-                                title=reminder['title'],
-                                scheduled_time=reminder['scheduled_time'],
-                                user_id=user_id
-                            )
-                            
-                            if reminder_id:
-                                success_count += 1
-                            else:
-                                failed_count += 1
-                        except Exception as e:
-                            self.logger.error(f"Error creating individual reminder: {e}")
-                            failed_count += 1
-                    
-                    if success_count > 0:
-                        if failed_count > 0:
-                            return True, f"✅ Criei {success_count} lembretes (falha em {failed_count})"
-                        else:
-                            return True, f"✅ Criei {success_count} lembretes com sucesso!"
-                    else:
-                        return False, "❌ Não consegui criar nenhum dos lembretes."
-                
-                # Handle single reminder case
-                elif 'title' in reminder_data and 'scheduled_time' in reminder_data:
-                    reminder_id, scheduled_iso = self.create_reminder(
-                        title=reminder_data['title'],
-                        scheduled_time=reminder_data['scheduled_time'],
-                        user_id=user_id
-                    )
-                    
-                    if reminder_id:
-                        # Format time for display
-                        try:
-                            scheduled_dt = datetime.fromisoformat(scheduled_iso)
-                            localized_time = scheduled_dt.astimezone(BRAZIL_TZ)
-                            formatted_time = localized_time.strftime("%d/%m/%Y às %H:%M")
-                            
-                            return True, f"✅ Lembrete criado: '{reminder_data['title']}' para {formatted_time}"
-                        except Exception as e:
-                            self.logger.error(f"Error formatting confirmation message: {e}")
-                            return True, f"✅ Lembrete criado: '{reminder_data['title']}'"
-                    else:
-                        self.logger.warning("Failed to create reminder in database")
-                        return False, "❌ Não consegui salvar o lembrete. Por favor, tente novamente."
-                else:
-                    self.logger.warning(f"Reminder data missing required fields: {reminder_data}")
-                    return False, "❌ Não consegui entender os detalhes do lembrete. Por favor, tente novamente."
-                
-            except Exception as e:
-                self.logger.error(f"Error in handle_reminder_intent: {str(e)}", exc_info=True)
-                return False, "❌ Ocorreu um erro ao processar seu lembrete. Por favor, tente novamente."
-        
-        elif intent == 'listar':
-            self.logger.info("Detected list reminders request")
-            # Implementation for listing reminders
-            try:
-                reminders = self.list_reminders(user_id)
-                if not reminders:
-                    return True, "Você não tem lembretes ativos no momento."
-                
-                response = "Seus lembretes:\n\n"
-                for i, reminder in enumerate(reminders, 1):
-                    response += f"{i}. {reminder['title']} - {reminder['scheduled_time']}\n"
-                
-                return True, response
-            except Exception as e:
-                self.logger.error(f"Error listing reminders: {e}")
-                return False, "❌ Não consegui listar seus lembretes. Por favor, tente novamente."
-        
-        elif intent == 'deletar':
-            self.logger.info("Detected delete reminder request")
-            # Implementation for deleting reminders
-            try:
-                # Logic to identify which reminder to delete
-                reminder_id = None  # Extract from text
-                if reminder_id:
-                    success = self.delete_reminder(reminder_id, user_id)
-                    if success:
-                        return True, "✅ Lembrete excluído com sucesso!"
-                    else:
-                        return False, "❌ Não consegui encontrar esse lembrete para excluir."
-                else:
-                    return False, "❌ Por favor, especifique qual lembrete deseja excluir."
-            except Exception as e:
-                self.logger.error(f"Error deleting reminder: {e}")
-                return False, "❌ Erro ao excluir o lembrete. Por favor, tente novamente."
-        
-        else:
-            self.logger.warning(f"Unknown reminder intent: {intent}")
-            return False, "❌ Não entendi o que você quer fazer com os lembretes. Você pode criar, listar ou excluir lembretes."
-
-    def process_reminder(self, user_phone, title, time_str):
-        """Processa a criação de um novo lembrete"""
-        try:
-            # Converter data/hora para timestamp
-            scheduled_time = self.parse_datetime_with_llm(time_str)
-
-            # Criar o lembrete
-            reminder_id = create_reminder(user_phone, title, scheduled_time)
-
-            if reminder_id:
-                return f"✅ Lembrete criado: {title} para {format_datetime(scheduled_time)}"
-            else:
-                return "❌ Não consegui criar o lembrete. Por favor, tente novamente."
-
-        except Exception as e:
-            self.logger.error(f"Error processing reminder: {str(e)}")
-            return "❌ Não consegui processar o lembrete. Por favor, tente novamente."
-
-    def start_reminder_checker(self):
-        """Inicia o verificador de lembretes em uma thread separada como backup"""
-        def reminder_checker_thread():
-            self.logger.info("Backup reminder checker thread started")
-
-            # Configurar o intervalo de verificação (mais longo, já que temos o cron-job.org)
-            check_interval = 300  # 5 minutos
-
-            while True:
-                try:
-                    # Dormir primeiro
-                    import time as time_module
-                    time_module.sleep(check_interval)
-
-                    # Depois verificar os lembretes
-                    self.logger.info("Running backup reminder check")
-                    self.check_and_send_reminders()
-
-                except Exception as e:
-                    self.logger.error(f"Error in backup reminder checker: {str(e)}")
-
-        import threading
-        thread = threading.Thread(target=reminder_checker_thread, daemon=True)
-        thread.start()
-        self.logger.info("Backup reminder checker background thread started")
-        return thread
-
-    def check_and_send_reminders(self):
-        """Checks for pending reminders and sends notifications"""
-        try:
-            self.logger.info("Checking for pending reminders...")
-
-            # Get current time in UTC
-            now = datetime.now(timezone.utc)
-            # Truncate seconds for comparison
-            now_truncated = now.replace(second=0, microsecond=0)
-
-            # Get all active reminders
-            from utils.database import supabase
-            result = supabase.table('reminders') \
-                .select('*') \
-                .eq('is_active', True) \
-                .execute()
-
-            reminders = result.data
-            self.logger.info(f"Found {len(reminders)} active reminders")
-
-            # Filter reminders manually to ignore seconds
-            pending_reminders = []
-            for reminder in reminders:
-                scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                # Truncate seconds for comparison
-                scheduled_time_truncated = scheduled_time.replace(second=0, microsecond=0)
-
-                # Only include reminders that are due (current time >= scheduled time)
-                # Add a debug log to see the comparison
-                self.logger.info(f"Comparing reminder time {scheduled_time_truncated} with current time {now_truncated}")
-                if now_truncated >= scheduled_time_truncated:
-                    self.logger.info(f"Reminder {reminder['id']} is due")
-                    pending_reminders.append(reminder)
-                else:
-                    self.logger.info(f"Reminder {reminder['id']} is not yet due")
-
-            self.logger.info(f"Found {len(pending_reminders)} pending reminders after time comparison")
-
-            sent_count = 0
-            failed_count = 0
-
-            for reminder in pending_reminders:
-                # Send notification
-                success = self.send_reminder_notification(reminder)
-
-                if success:
-                    # Mark as inactive
-                    from utils.database import supabase
-                    update_result = supabase.table('reminders') \
-                        .update({'is_active': False}) \
-                        .eq('id', reminder['id']) \
-                        .execute()
-
-                    self.logger.info(f"Reminder {reminder['id']} marked as inactive after sending")
-                    sent_count += 1
-                else:
-                    self.logger.warning(f"Failed to send reminder {reminder['id']}, will try again later")
-                    failed_count += 1
-
-            # Also check late reminders
-            late_results = self.check_late_reminders()
-
-            return {
-                "success": True, 
-                "processed": len(pending_reminders),
-                "sent": sent_count,
-                "failed": failed_count,
-                "late_processed": late_results.get("processed", 0),
-                "late_sent": late_results.get("sent", 0),
-                "late_failed": late_results.get("failed", 0),
-                "late_deactivated": late_results.get("deactivated", 0)
+            system_prompt = """
+            Você é um assistente especializado em extrair detalhes de lembretes de mensagens em português.
+            
+            Analise a mensagem do usuário e extraia as seguintes informações:
+            - O que deve ser lembrado (texto)
+            - Quando o lembrete deve ser enviado (data e hora)
+            
+            Retorne um JSON com o seguinte formato:
+            {
+              "reminder_text": "texto do lembrete",
+              "reminder_time": "YYYY-MM-DD HH:MM",
+              "confidence": 0.0 a 1.0
             }
-        except Exception as e:
-            self.logger.error(f"Error checking reminders: {str(e)}")
-            return {"error": str(e)}
-
-    def check_late_reminders(self):
-        """Verifica lembretes atrasados que não foram enviados após várias tentativas"""
-        try:
-            # Obter a data e hora atual em UTC
-            now = datetime.now(timezone.utc)
-            # Truncate seconds
-            now_truncated = now.replace(second=0, microsecond=0)
-
-            # Definir um limite de tempo para considerar um lembrete como atrasado (ex: 30 minutos)
-            late_threshold = now_truncated - timedelta(minutes=30)
-
-            # Buscar lembretes ativos
-            from utils.database import supabase
-            result = supabase.table('reminders') \
-                .select('*') \
-                .eq('is_active', True) \
-                .execute()
-
-            reminders = result.data
-
-            # Filter late reminders manually
-            late_reminders = []
-            for reminder in reminders:
-                scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-                # Truncate seconds
-                scheduled_time_truncated = scheduled_time.replace(second=0, microsecond=0)
-                if scheduled_time_truncated <= late_threshold:
-                    late_reminders.append(reminder)
-
-            processed = 0
-            sent = 0
-            failed = 0
-            deactivated = 0
-
-            if late_reminders:
-                self.logger.info(f"Found {len(late_reminders)} late reminders")
-                processed = len(late_reminders)
-
-                for reminder in late_reminders:
-                    # Tentar enviar o lembrete atrasado
-                    success = self.send_reminder_notification(reminder)
-
-                    if success:
-                        # Mark as inactive
-                        update_result = supabase.table('reminders') \
-                            .update({'is_active': False}) \
-                            .eq('id', reminder['id']) \
-                            .execute()
-
-                        self.logger.info(f"Late reminder {reminder['id']} marked as inactive after sending")
-                        sent += 1
-                    else:
-                        # For very late reminders (over 2 hours), deactivate them
-                        very_late_threshold = now_truncated - timedelta(hours=2)
-                        scheduled_time = datetime.fromisoformat(reminder['scheduled_time'].replace('Z', '+00:00'))
-
-                        if scheduled_time <= very_late_threshold:
-                            update_result = supabase.table('reminders') \
-                                .update({'is_active': False}) \
-                                .eq('id', reminder['id']) \
-                                .execute()
-
-                            self.logger.warning(f"Deactivated very late reminder {reminder['id']} (over 2 hours late)")
-                            deactivated += 1
-                        else:
-                            self.logger.warning(f"Failed to send late reminder {reminder['id']}, will try again later")
-                            failed += 1
-
-            return {
-                "processed": processed,
-                "sent": sent,
-                "failed": failed,
-                "deactivated": deactivated
-            }
-
-        except Exception as e:
-            self.logger.error(f"Error checking late reminders: {str(e)}")
-            return {
-                "processed": 0,
-                "sent": 0,
-                "failed": 0,
-                "deactivated": 0,
-                "error": str(e)
-            }
-
-    def send_reminder_notification(self, reminder):
-        """Envia uma notificação de lembrete para o usuário"""
-        try:
-            user_phone = reminder['user_phone']
-            title = reminder['title']
-
-            # Format the message
-            message_body = f"🔔 *LEMBRETE*: {title}"
-
-            self.logger.info(f"Sending reminder to {user_phone}: {message_body}")
-
-            # Use the send_message_func if provided
-            if self.send_message_func:
-                success = self.send_message_func(user_phone, message_body)
-
-                if success:
-                    # Store in conversation history
-                    from agents.general_agent.general_db import store_conversation
-                    store_conversation(user_phone, message_body, 'text', False, agent="REMINDER")
-                    return True
-                else:
-                    self.logger.error(f"Failed to send reminder to {user_phone}")
-                    return False
-            else:
-                self.logger.error("No send_message_func provided to ReminderAgent")
-                return False
-
-        except Exception as e:
-            self.logger.error(f"Error sending reminder notification: {str(e)}")
-            return False
-
-    def parse_reminder(self, message, action_type=None):
-        """
-        Parse a reminder message and extract the relevant details.
-        
-        Args:
-            message (str): The reminder message to parse
-            action_type (dict, optional): Additional context, such as current_time
             
-        Returns:
-            dict: The parsed reminder with title and scheduled_time
-        """
-        # Import required modules
-        import re
-        import os
-        import json
-        from datetime import datetime, timedelta
-        from dateutil import parser
-        from openai import OpenAI
-        
-        self.logger.info(f"STARTING parse_reminder with message: {message[:50]}...")
-        
-        # Extract current time context if provided
-        current_time = None
-        if action_type and isinstance(action_type, dict) and 'current_time' in action_type:
-            current_time_str = action_type['current_time']
-            # Clean up the time string and parse it
-            current_time_str = re.sub(r'[^\w\s:/\-]', '', current_time_str)
-            self.logger.info(f"Current time string from action_type: '{current_time_str}'")
+            Onde:
+            - "reminder_text": o texto do que deve ser lembrado
+            - "reminder_time": a data e hora no formato YYYY-MM-DD HH:MM
+            - "confidence": sua confiança na extração (0.0 a 1.0)
             
-            try:
-                # Try various datetime formats
-                for fmt in ['%b/%d/%Y %H:%M', '%Y-%m-%d %H:%M:%S%z', '%Y-%m-%dT%H:%M:%S%z']:
-                    try:
-                        current_time = datetime.strptime(current_time_str, fmt)
-                        break
-                    except ValueError:
-                        continue
-                
-                if not current_time:
-                    # Try another approach with dateutil parser
-                    current_time = parser.parse(current_time_str)
-                    
-                # Add timezone if missing
-                if current_time.tzinfo is None:
-                    current_time = BRAZIL_TZ.localize(current_time)
-                    
-                self.logger.info(f"Parsed current time: {current_time}")
-            except Exception as e:
-                self.logger.error(f"Failed to parse current time: {e}")
-                # Default to now
-                current_time = datetime.now(BRAZIL_TZ)
-        else:
-            # Default to now
-            current_time = datetime.now(BRAZIL_TZ)
-        
-        # Attempt to parse the reminder with direct OpenAI call
-        self.logger.info("Attempting to parse with direct OpenAI API call")
-        try:        
-            # Get API key
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY environment variable not set")
+            Se não conseguir extrair alguma informação, retorne null para o campo correspondente.
+            Se a mensagem não contiver um pedido de lembrete, retorne confidence: 0.0.
             
-            # Create client
-            client = OpenAI(api_key=api_key)
+            Exemplos:
+            - "me lembra de pagar a conta amanhã às 10h" → {"reminder_text": "pagar a conta", "reminder_time": "2023-05-11 10:00", "confidence": 0.9}
+            - "me lembra da reunião dia 15/05 às 14h" → {"reminder_text": "reunião", "reminder_time": "2023-05-15 14:00", "confidence": 0.9}
+            - "lembrete para ligar para o médico na segunda" → {"reminder_text": "ligar para o médico", "reminder_time": "2023-05-15 09:00", "confidence": 0.7}
+            - "como está o tempo hoje?" → {"reminder_text": null, "reminder_time": null, "confidence": 0.0}
             
-            # Prepare system prompt
-            system_prompt = f"""You are a helpful AI assistant specialized in parsing reminder text into structured data.
-Extract the reminder title and time information from the user's message.
-
-Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S %z')}
-Current year: {current_time.year}
-Tomorrow's date: {(current_time + timedelta(days=1)).strftime('%Y-%m-%d')}
-
-Your response should follow this format:
-{{
-  "title": "extracted reminder title",
-  "scheduled_time": "YYYY-MM-DDTHH:MM:SS-03:00" (in ISO 8601 format, Brazil/São Paulo timezone)
-}}
-
-If there are multiple reminders, include them in a "reminders" array using the same format.
-Always convert human-readable time expressions to proper ISO timestamps.
-Never generate dates in the past.
-"""
+            Hoje é {current_date}.
+            """
             
-            # Prepare messages
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message}
-            ]
+            # Format the current date
+            current_date = datetime.now(BRAZIL_TIMEZONE).strftime("%Y-%m-%d")
+            system_prompt = system_prompt.format(current_date=current_date)
             
-            # Make the direct API call
-            self.logger.info("Making direct OpenAI API call")
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                temperature=0
+            # Use OpenAI API directly
+            response = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
             )
             
-            # Process the response
-            if response and response.choices and response.choices[0].message.content:
-                content = response.choices[0].message.content
-                self.logger.info(f"Raw response from OpenAI: {content}")
-                
-                # Parse JSON
-                try:
-                    parsed_data = json.loads(content)
-                    self.logger.info(f"Parsed JSON data: {parsed_data}")
-                    
-                    # Validate the data
-                    if "title" not in parsed_data:
-                        self.logger.warning("Missing 'title' in parsed data")
-                        parsed_data["title"] = "Lembrete"
-                    
-                    if "scheduled_time" not in parsed_data:
-                        self.logger.warning("Missing 'scheduled_time' in parsed data")
-                        # Default to tomorrow at noon
-                        tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
-                        parsed_data["scheduled_time"] = tomorrow_noon.isoformat()
-                    else:
-                        # Validate the scheduled time is not in the past
-                        try:
-                            scheduled_time = datetime.fromisoformat(parsed_data["scheduled_time"])
-                            if scheduled_time < current_time:
-                                self.logger.warning(f"Scheduled time {scheduled_time} is in the past, adjusting to tomorrow")
-                                tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
-                                parsed_data["scheduled_time"] = tomorrow_noon.isoformat()
-                        except (ValueError, TypeError):
-                            self.logger.warning(f"Could not parse scheduled_time: {parsed_data['scheduled_time']}")
-                            tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
-                            parsed_data["scheduled_time"] = tomorrow_noon.isoformat()
-                    
-                    # Also check reminders array if present
-                    if "reminders" in parsed_data and isinstance(parsed_data["reminders"], list):
-                        for i, reminder in enumerate(parsed_data["reminders"]):
-                            if "title" not in reminder:
-                                reminder["title"] = f"Lembrete {i+1}"
-                            
-                            if "scheduled_time" not in reminder:
-                                tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
-                                reminder["scheduled_time"] = tomorrow_noon.isoformat()
-                            else:
-                                # Validate the scheduled time is not in the past
-                                try:
-                                    scheduled_time = datetime.fromisoformat(reminder["scheduled_time"])
-                                    if scheduled_time < current_time:
-                                        self.logger.warning(f"Reminder {i} scheduled time {scheduled_time} is in the past, adjusting to tomorrow")
-                                        tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
-                                        reminder["scheduled_time"] = tomorrow_noon.isoformat()
-                                except (ValueError, TypeError):
-                                    self.logger.warning(f"Could not parse reminder {i} scheduled_time: {reminder['scheduled_time']}")
-                                    tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
-                                    reminder["scheduled_time"] = tomorrow_noon.isoformat()
-                    
-                    return parsed_data
-                except json.JSONDecodeError:
-                    # Try to extract JSON with regex if the response isn't pure JSON
-                    json_match = re.search(r'({.*})', content, re.DOTALL)
-                    if json_match:
-                        try:
-                            extracted_json = json_match.group(1)
-                            parsed_data = json.loads(extracted_json)
-                            self.logger.info(f"Extracted JSON from text: {parsed_data}")
-                            return parsed_data
-                        except json.JSONDecodeError:
-                            self.logger.error("Failed to parse extracted JSON")
+            response_text = response.choices[0].message.content
             
-            # If we got here, something went wrong
-            raise ValueError("Failed to get valid response from OpenAI API")
+            # Parse the JSON response
+            result = parse_json_response(response_text)
+            if not result:
+                logger.error("Failed to parse LLM response as JSON")
+                return None
+            
+            logger.info(f"Extracted reminder details: {result}")
+            return result
+            
         except Exception as e:
-            self.logger.error(f"Error in parse_reminder: {str(e)}", exc_info=True)
-            # Create a basic structure with a default reminder for tomorrow
-            tomorrow_noon = (current_time + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+            logger.error(f"Error extracting reminder details: {str(e)}")
+            return None
+    
+    def extract_reminder_cancellation(self, message):
+        """
+        Extract reminder cancellation details from a message using LLM.
+        """
+        try:
+            logger.info(f"Extracting reminder cancellation from message: '{message[:50]}...' (truncated)")
             
-            # Try to extract a meaningful title from the message
-            title_match = re.search(r'(?:me\s+lembra\s+de|lembrar\s+de)\s+(.*?)(?:\s+(?:em|daqui|amanhã|hoje|às|as|\d+\s*min|\d+\s*hora|pela|no|na|ao|às|as))?(?=$|\s)', message.lower(), re.IGNORECASE)
+            system_prompt = """
+            Você é um assistente especializado em extrair detalhes de cancelamento de lembretes de mensagens em português.
             
-            title = "Lembrete"
-            if title_match:
-                title = title_match.group(1).strip()
+            Analise a mensagem do usuário e determine se ele está tentando cancelar um lembrete.
+            Se sim, extraia o número ou identificador do lembrete a ser cancelado.
+            
+            Retorne um JSON com o seguinte formato:
+            {
+              "is_cancellation": true/false,
+              "reminder_id": número ou null,
+              "confidence": 0.0 a 1.0
+            }
+            
+            Onde:
+            - "is_cancellation": true se a mensagem é um pedido de cancelamento, false caso contrário
+            - "reminder_id": o número/id do lembrete a ser cancelado, ou null se não for especificado
+            - "confidence": sua confiança na extração (0.0 a 1.0)
+            
+            Exemplos:
+            - "cancelar lembrete 2" → {"is_cancellation": true, "reminder_id": 2, "confidence": 0.9}
+            - "remover lembrete número 5" → {"is_cancellation": true, "reminder_id": 5, "confidence": 0.9}
+            - "apagar o lembrete 1" → {"is_cancellation": true, "reminder_id": 1, "confidence": 0.9}
+            - "cancelar todos os lembretes" → {"is_cancellation": true, "reminder_id": null, "confidence": 0.7}
+            - "como está o tempo hoje?" → {"is_cancellation": false, "reminder_id": null, "confidence": 0.0}
+            """
+            
+            # Use OpenAI API directly
+            response = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            
+            response_text = response.choices[0].message.content
+            
+            # Parse the JSON response
+            result = parse_json_response(response_text)
+            if not result:
+                logger.error("Failed to parse LLM response as JSON")
+                return None
+            
+            logger.info(f"Extracted reminder cancellation details: {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error extracting reminder cancellation: {str(e)}")
+            return None
+    
+    def detect_reminder_list_request(self, message):
+        """
+        Detect if a message is requesting to list reminders.
+        """
+        try:
+            logger.info(f"Detecting reminder list request from message: '{message[:50]}...' (truncated)")
+            
+            system_prompt = """
+            Você é um assistente especializado em detectar pedidos de listagem de lembretes em mensagens em português.
+            
+            Analise a mensagem do usuário e determine se ele está pedindo para listar seus lembretes.
+            
+            Retorne um JSON com o seguinte formato:
+            {
+              "is_list_request": true/false,
+              "confidence": 0.0 a 1.0
+            }
+            
+            Onde:
+            - "is_list_request": true se a mensagem é um pedido de listagem de lembretes, false caso contrário
+            - "confidence": sua confiança na detecção (0.0 a 1.0)
+            
+            Exemplos:
+            - "listar lembretes" → {"is_list_request": true, "confidence": 0.9}
+            - "quais são meus lembretes?" → {"is_list_request": true, "confidence": 0.9}
+            - "mostre meus lembretes" → {"is_list_request": true, "confidence": 0.9}
+            - "lembretes" → {"is_list_request": true, "confidence": 0.7}
+            - "como está o tempo hoje?" → {"is_list_request": false, "confidence": 0.0}
+            """
+            
+            # Use OpenAI API directly
+            response = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            
+            response_text = response.choices[0].message.content
+            
+            # Parse the JSON response
+            result = parse_json_response(response_text)
+            if not result:
+                logger.error("Failed to parse LLM response as JSON")
+                return None
+            
+            logger.info(f"Detected reminder list request: {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error detecting reminder list request: {str(e)}")
+            return None
+    
+    # Add any other methods that might use llm_utils here
+    
+    def handle_reminder_intent(self, from_number, message):
+        """
+        Handle a reminder intent from a user message.
+        """
+        try:
+            # First check if it's a request to list reminders
+            list_request = self.detect_reminder_list_request(message)
+            if list_request and list_request.get('is_list_request', False) and list_request.get('confidence', 0) > 0.5:
+                # List reminders
+                reminders = list_reminders(from_number)
+                if not reminders:
+                    return "Você não tem nenhum lembrete agendado."
+                
+                formatted_list = format_reminder_list_by_time(reminders)
+                return f"Seus lembretes:\n\n{formatted_list}"
+            
+            # Then check if it's a cancellation request
+            cancel_request = self.extract_reminder_cancellation(message)
+            if cancel_request and cancel_request.get('is_cancellation', False) and cancel_request.get('confidence', 0) > 0.5:
+                reminder_id = cancel_request.get('reminder_id')
+                if reminder_id is not None:
+                    # Cancel a specific reminder
+                    result = cancel_reminder(from_number, reminder_id)
+                    if result:
+                        return f"Lembrete {reminder_id} cancelado com sucesso."
+                    else:
+                        return f"Não encontrei um lembrete com o número {reminder_id}."
+                else:
+                    # User wants to cancel but didn't specify which one
+                    reminders = list_reminders(from_number)
+                    if not reminders:
+                        return "Você não tem nenhum lembrete para cancelar."
+                    
+                    formatted_list = format_reminder_list_by_time(reminders)
+                    return f"Qual lembrete você deseja cancelar? Por favor, especifique o número:\n\n{formatted_list}"
+            
+            # Finally, try to extract reminder details for creation
+            reminder_details = self.extract_reminder_details(message)
+            if reminder_details and reminder_details.get('confidence', 0) > 0.5:
+                reminder_text = reminder_details.get('reminder_text')
+                reminder_time_str = reminder_details.get('reminder_time')
+                
+                if not reminder_text or not reminder_time_str:
+                    return "Não consegui entender todos os detalhes do lembrete. Por favor, especifique o que devo lembrar e quando."
+                
+                try:
+                    # Parse the datetime
+                    reminder_time = datetime.strptime(reminder_time_str, "%Y-%m-%d %H:%M")
+                    reminder_time = BRAZIL_TIMEZONE.localize(reminder_time)
+                    
+                    # Create the reminder
+                    reminder_id = create_reminder(from_number, reminder_text, reminder_time)
+                    
+                    # Format the confirmation message
+                    local_time = format_datetime(reminder_time)
+                    return f"Lembrete criado com sucesso! Vou te lembrar de '{reminder_text}' em {local_time}."
+                    
+                except ValueError:
+                    return "Não consegui entender a data e hora do lembrete. Por favor, tente novamente com um formato como 'amanhã às 10h' ou '15/05 às 14h'."
+            
+            # If we got here, we couldn't handle the reminder intent
+            return "Não consegui entender seu pedido de lembrete. Por favor, tente novamente com algo como 'me lembra de pagar a conta amanhã às 10h'."
+            
+        except Exception as e:
+            logger.error(f"Error handling reminder intent: {str(e)}")
+            return "Ocorreu um erro ao processar seu pedido de lembrete. Por favor, tente novamente."
+    
+    def check_and_send_reminders(self):
+        """
+        Check for pending reminders and send them.
+        """
+        try:
+            logger.info("Checking for pending reminders")
+            
+            # Get pending reminders (due now)
+            pending_reminders = get_pending_reminders()
+            
+            # Get late reminders (missed while the service was down)
+            late_reminders = get_late_reminders()
+            
+            total_reminders = len(pending_reminders) + len(late_reminders)
+            logger.info(f"Found {len(pending_reminders)} pending and {len(late_reminders)} late reminders")
+            
+            # Process pending reminders
+            for reminder in pending_reminders:
+                self._send_reminder(reminder, is_late=False)
+            
+            # Process late reminders
+            for reminder in late_reminders:
+                self._send_reminder(reminder, is_late=True)
             
             return {
-                "title": title,
-                "scheduled_time": tomorrow_noon.isoformat()
+                "status": "success",
+                "pending_count": len(pending_reminders),
+                "late_count": len(late_reminders),
+                "total_processed": total_reminders
             }
-
-class TimeAwareReminderAgent(ReminderAgent):
-    """
-    A version of ReminderAgent that allows overriding the current time for testing purposes.
-    This is primarily used for evaluation scripts.
-    """
-    def __init__(self, send_message_func=None, intent_classifier=None, api_key=None, current_time=None):
-        super().__init__(send_message_func)
-        self.current_time = current_time
-        
-    def parse_reminder(self, message, action_type):
-        """Override parse_reminder to use the specified current_time"""
-        self.logger.info(f"TimeAwareReminderAgent parsing reminder with custom time: {self.current_time}")
-        
-        # If we have a custom current_time, use it
-        if self.current_time:
-            # Make sure it's timezone-aware
-            if not self.current_time.tzinfo:
-                self.current_time = BRAZIL_TZ.localize(self.current_time)
             
-            self.logger.info(f"Using custom time for parsing: {self.current_time.isoformat()}")
+        except Exception as e:
+            logger.error(f"Error checking reminders: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+    
+    def _send_reminder(self, reminder, is_late=False):
+        """
+        Send a reminder to the user.
+        """
+        try:
+            if not self.send_message_func:
+                logger.error("No send_message_func provided to ReminderAgent")
+                return False
             
-            # Call the LLM parser directly with our custom time
+            user_number = reminder['user_number']
+            reminder_text = reminder['reminder_text']
+            reminder_time = reminder['reminder_time']
+            reminder_id = reminder['id']
+            
+            # Format the reminder message
+            local_time = format_datetime(to_local_timezone(reminder_time))
+            
+            if is_late:
+                message = f"⏰ LEMBRETE ATRASADO ⏰\n\n{reminder_text}\n\nEste lembrete estava agendado para {local_time}, mas não pude enviá-lo na hora."
+            else:
+                message = f"⏰ LEMBRETE ⏰\n\n{reminder_text}"
+            
+            # Send the message
+            self.send_message_func(user_number, message)
+            
+            # Mark the reminder as sent in the database
+            # This would typically update a 'sent' flag in your database
+            # For now, we'll just log it
+            logger.info(f"Sent reminder {reminder_id} to {user_number}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error sending reminder: {str(e)}")
+            return False
+    
+    def _check_reminders_loop(self):
+        """
+        Background thread function to periodically check for reminders.
+        """
+        logger.info(f"Starting reminder checker loop with interval {self.check_interval}s")
+        
+        while not self.stop_event.is_set():
             try:
-                llm_result = self._parse_with_llm_iso(message, self.current_time)
-                self.logger.info(f"LLM parsing result with custom time: {llm_result}")
-                return llm_result
+                self.check_and_send_reminders()
             except Exception as e:
-                self.logger.error(f"Error in TimeAwareReminderAgent parse_reminder: {str(e)}")
-                return None
-        else:
-            # Fall back to the parent implementation if no custom time
-            return super().parse_reminder(message, action_type)
+                logger.error(f"Error in reminder checker loop: {str(e)}")
+            
+            # Sleep for the check interval, but check the stop event periodically
+            for _ in range(self.check_interval):
+                if self.stop_event.is_set():
+                    break
+                time.sleep(1)
+    
+    def start_reminder_checker(self):
+        """
+        Start the background thread for checking reminders.
+        """
+        self.stop_event.clear()
+        checker_thread = threading.Thread(target=self._check_reminders_loop, daemon=True)
+        checker_thread.start()
+        logger.info("Reminder checker thread started")
+        return checker_thread
+    
+    def stop_reminder_checker(self):
+        """
+        Stop the background thread for checking reminders.
+        """
+        self.stop_event.set()
+        logger.info("Reminder checker thread stopping")

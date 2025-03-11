@@ -6,9 +6,9 @@ import logging
 import os
 from datetime import datetime
 import pytz
+import openai
 
 from agents.general_agent.general_db import store_conversation, get_conversation_history
-from utils.llm_utils import chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +28,14 @@ def get_ai_response(user_message, conversation_history=None, system_prompt=None,
     # Add the user's message
     messages.append({"role": "user", "content": user_message})
     
-    # Use the centralized chat_completion function
-    response = chat_completion(
-        messages=messages,
+    # Use OpenAI API directly
+    response = openai.ChatCompletion.create(
         model="gpt-4o-mini",  # or whatever model you're using
+        messages=messages,
         temperature=0.7
     )
     
-    return response
+    return response.choices[0].message.content
 
 def handle_message(from_number, message_body, message_type='text'):
     """

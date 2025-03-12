@@ -7,7 +7,6 @@ import requests
 import tempfile
 import base64
 import openai
-from PIL import Image
 from io import BytesIO
 
 logger = logging.getLogger(__name__)

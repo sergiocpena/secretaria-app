@@ -55,23 +55,20 @@ class ReminderAgent:
             IMPORTANTE: Sua resposta DEVE ser um JSON válido com o seguinte formato exato:
             {
               "reminder_text": "texto do lembrete",
-              "reminder_time": "YYYY-MM-DD HH:MM",
-              "confidence": 0.0 a 1.0
+              "reminder_time": "YYYY-MM-DD HH:MM" 
             }
             
             Onde:
             - "reminder_text": o texto do que deve ser lembrado
             - "reminder_time": a data e hora no formato YYYY-MM-DD HH:MM
-            - "confidence": sua confiança na extração (0.0 a 1.0)
             
             Se não conseguir extrair alguma informação, retorne null para o campo correspondente.
-            Se a mensagem não contiver um pedido de lembrete, retorne confidence: 0.0.
             
             Exemplos:
-            - "me lembra de pagar a conta amanhã às 10h" → {"reminder_text": "pagar a conta", "reminder_time": "2023-05-11 10:00", "confidence": 0.9}
-            - "me lembra da reunião dia 15/05 às 14h" → {"reminder_text": "reunião", "reminder_time": "2023-05-15 14:00", "confidence": 0.9}
-            - "lembrete para ligar para o médico na segunda" → {"reminder_text": "ligar para o médico", "reminder_time": "2023-05-15 09:00", "confidence": 0.7}
-            - "como está o tempo hoje?" → {"reminder_text": null, "reminder_time": null, "confidence": 0.0}
+            - "me lembra de pagar a conta amanhã às 10h" → {"reminder_text": "pagar a conta", "reminder_time": "2023-05-11 10:00"}
+            - "me lembra da reunião dia 15/05 às 14h" → {"reminder_text": "reunião", "reminder_time": "2023-05-15 14:00"}
+            - "lembrete para ligar para o médico na segunda" → {"reminder_text": "ligar para o médico", "reminder_time": "2023-05-15 09:00"}
+            - "como está o tempo hoje?" → {"reminder_text": null, "reminder_time": null} 
             
             Hoje é {current_date}.
             """
@@ -96,54 +93,18 @@ class ReminderAgent:
                     response_format={"type": "json_object"}
                 )
                 
+                logger.info(f"Raw response from OpenAI: {response}")
                 # Get the response content
                 response_text = response.choices[0].message.content.strip()
+                logger.info(f"Response from OpenAI converted to text: {response_text}")
                 
                 # Try to parse the JSON
                 result = json.loads(response_text)
                 logger.info(f"Extracted reminder details: {result}")
                 return result
-                
-            except (json.JSONDecodeError, Exception) as e:
-                logger.error(f"First attempt failed: {str(e)}")
-                logger.error(f"Raw response: {response_text if 'response_text' in locals() else 'No response'}")
-                
-                # Second attempt with a different approach - use a structured format
-                try:
-                    # Create a more structured prompt for the second attempt
-                    structured_prompt = f"""
-                    Extraia as informações de lembrete da seguinte mensagem: "{message}"
-                    
-                    Responda APENAS com um JSON válido no seguinte formato:
-                    {{
-                      "reminder_text": "texto extraído",
-                      "reminder_time": "YYYY-MM-DD HH:MM",
-                      "confidence": 0.7
-                    }}
-                    
-                    Hoje é {current_date}.
-                    """
-                    
-                    # Try with a different model if available
-                    response2 = client.chat.completions.create(
-                        model="gpt-3.5-turbo",  # Fallback to a different model
-                        messages=[
-                            {"role": "system", "content": "Você é um assistente que extrai informações em formato JSON."},
-                            {"role": "user", "content": structured_prompt}
-                        ],
-                        temperature=0.1,
-                        response_format={"type": "json_object"}
-                    )
-                    
-                    response_text2 = response2.choices[0].message.content.strip()
-                    result = json.loads(response_text2)
-                    logger.info(f"Second attempt extracted reminder details: {result}")
-                    return result
-                    
-                except Exception as e2:
-                    logger.error(f"Second attempt failed: {str(e2)}")
-                    logger.error(f"Raw response: {response_text2 if 'response_text2' in locals() else 'No response'}")
-                    return None
+            except Exception as e:
+                logger.error(f"Error in OpenAI API call: {str(e)}")
+                return None
             
         except Exception as e:
             logger.error(f"Error extracting reminder details: {str(e)}")
@@ -165,21 +126,19 @@ class ReminderAgent:
             Retorne um JSON com o seguinte formato:
             {
               "is_cancellation": true/false,
-              "reminder_id": número ou null,
-              "confidence": 0.0 a 1.0
+              "reminder_id": número ou null
             }
             
             Onde:
             - "is_cancellation": true se a mensagem é um pedido de cancelamento, false caso contrário
             - "reminder_id": o número/id do lembrete a ser cancelado, ou null se não for especificado
-            - "confidence": sua confiança na extração (0.0 a 1.0)
             
             Exemplos:
-            - "cancelar lembrete 2" → {"is_cancellation": true, "reminder_id": 2, "confidence": 0.9}
-            - "remover lembrete número 5" → {"is_cancellation": true, "reminder_id": 5, "confidence": 0.9}
-            - "apagar o lembrete 1" → {"is_cancellation": true, "reminder_id": 1, "confidence": 0.9}
-            - "cancelar todos os lembretes" → {"is_cancellation": true, "reminder_id": null, "confidence": 0.7}
-            - "como está o tempo hoje?" → {"is_cancellation": false, "reminder_id": null, "confidence": 0.0}
+            - "cancelar lembrete 2" → {"is_cancellation": true, "reminder_id": 2}
+            - "remover lembrete número 5" → {"is_cancellation": true, "reminder_id": 5}
+            - "apagar o lembrete 1" → {"is_cancellation": true, "reminder_id": 1}
+            - "cancelar todos os lembretes" → {"is_cancellation": true, "reminder_id": null}
+            - "como está o tempo hoje?" → {"is_cancellation": false, "reminder_id": null}
             """
             
             # Use the new OpenAI API format
@@ -227,20 +186,18 @@ class ReminderAgent:
             
             Retorne um JSON com o seguinte formato:
             {
-              "is_list_request": true/false,
-              "confidence": 0.0 a 1.0
+              "is_list_request": true/false
             }
             
             Onde:
             - "is_list_request": true se a mensagem é um pedido de listagem de lembretes, false caso contrário
-            - "confidence": sua confiança na detecção (0.0 a 1.0)
             
             Exemplos:
-            - "listar lembretes" → {"is_list_request": true, "confidence": 0.9}
-            - "quais são meus lembretes?" → {"is_list_request": true, "confidence": 0.9}
-            - "mostre meus lembretes" → {"is_list_request": true, "confidence": 0.9}
-            - "lembretes" → {"is_list_request": true, "confidence": 0.7}
-            - "como está o tempo hoje?" → {"is_list_request": false, "confidence": 0.0}
+            - "listar lembretes" → {"is_list_request": true}
+            - "quais são meus lembretes?" → {"is_list_request": true}
+            - "mostre meus lembretes" → {"is_list_request": true}
+            - "lembretes" → {"is_list_request": true}
+            - "como está o tempo hoje?" → {"is_list_request": false}
             """
             
             # Use the new OpenAI API format
@@ -283,7 +240,7 @@ class ReminderAgent:
         try:
             # First check if it's a request to list reminders
             list_request = self.detect_reminder_list_request(message)
-            if list_request and list_request.get('is_list_request', False) and list_request.get('confidence', 0) > 0.5:
+            if list_request and list_request.get('is_list_request', False):
                 # List reminders
                 reminders = list_reminders(from_number)
                 if not reminders:
@@ -294,7 +251,7 @@ class ReminderAgent:
             
             # Then check if it's a cancellation request
             cancel_request = self.extract_reminder_cancellation(message)
-            if cancel_request and cancel_request.get('is_cancellation', False) and cancel_request.get('confidence', 0) > 0.5:
+            if cancel_request and cancel_request.get('is_cancellation', False):
                 reminder_id = cancel_request.get('reminder_id')
                 if reminder_id is not None:
                     # Cancel a specific reminder
@@ -314,7 +271,7 @@ class ReminderAgent:
             
             # Finally, try to extract reminder details for creation
             reminder_details = self.extract_reminder_details(message)
-            if reminder_details and reminder_details.get('confidence', 0) > 0.5:
+            if reminder_details:
                 reminder_text = reminder_details.get('reminder_text')
                 reminder_time_str = reminder_details.get('reminder_time')
                 

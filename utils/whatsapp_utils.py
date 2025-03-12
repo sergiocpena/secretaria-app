@@ -260,7 +260,7 @@ def process_message_async(from_number, body, num_media, form_values, intent_clas
                 transcribed_text = transcribe_audio(media_items[0][0])
                 
                 # Check for intent in transcription
-                intent_type, intent_details = intent_classifier.detect_intent(transcribed_text)
+                intent_type, _ = intent_classifier.detect_intent(transcribed_text)
                 
                 if intent_type == "reminder":
                     response_text = reminder_agent.handle_reminder_intent(user_phone, transcribed_text)
@@ -268,11 +268,11 @@ def process_message_async(from_number, body, num_media, form_values, intent_clas
                     response_text = get_ai_response(transcribed_text, is_audio_transcription=True)
         else:
             # Check for intent
-            intent_type, intent_details = intent_classifier.detect_intent(body)
+            intent_type, _ = intent_classifier.detect_intent(body)
             
             if intent_type == "reminder":
                 # Handle reminder intent
-                logger.info(f"Reminder intent detected: {intent_details}")
+                logger.info(f"Reminder intent detected")
                 response_text = reminder_agent.handle_reminder_intent(user_phone, body)
             else:
                 # Handle general conversation

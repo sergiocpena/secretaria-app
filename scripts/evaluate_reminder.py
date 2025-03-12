@@ -134,20 +134,7 @@ def evaluate_test_case(agent, test_case, case_number=None):
     print(f"\n{case_label}{message}")
     if notes:
         print(f"Notes: {notes}")
-    
-    # Set the current time for the agent if provided
-    current_time = None
-    if datetime_str:
-        try:
-            current_time = datetime.fromisoformat(datetime_str)
-            # Make sure it's timezone-aware
-            if current_time.tzinfo is None:
-                current_time = pytz.timezone('America/Sao_Paulo').localize(current_time)
-            print(f"Current time: {current_time}")
-        except ValueError:
-            print(f"Warning: Invalid datetime format in test case: {datetime_str}")
 
-    
     # Call LLM to parse the reminder
     result = agent.parse_reminder(message)
     

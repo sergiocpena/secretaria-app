@@ -28,7 +28,6 @@ from utils.whatsapp_utils import (
     webhook_handler, send_direct_message_handler, process_message_async
 )
 from utils.media_utils import process_image, transcribe_audio
-from utils.llm_utils import initialize_openai
 
 # Configure logging
 log_level = os.getenv('LOG_LEVEL', 'INFO')
@@ -60,6 +59,21 @@ load_dotenv()
 app = Flask(__name__)
 
 # Initialize OpenAI
+def initialize_openai(api_key):
+    """Initialize the OpenAI client with the provided API key"""
+    try:
+        if not api_key:
+            logger.error("No OpenAI API key provided")
+            return False
+        
+        openai.api_key = api_key
+        logger.info("OpenAI client initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Error initializing OpenAI client: {str(e)}")
+        return False
+
+# Call the initialize function
 if not initialize_openai(os.getenv('OPENAI_API_KEY')):
     logger.error("Failed to initialize OpenAI client. Some features may not work.")
 

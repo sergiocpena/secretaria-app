@@ -93,16 +93,18 @@ class ReminderAgent:
                 response_format={"type": "json_object"}
             )
             
-            response_text = response.choices[0].message.content
+            # Get the response content
+            response_text = response.choices[0].message.content.strip()
             
-            # Parse the JSON response
-            result = parse_json_response(response_text)
-            if not result:
-                logger.error("Failed to parse LLM response as JSON")
+            # Add better error handling for JSON parsing
+            try:
+                result = json.loads(response_text)
+                logger.info(f"Extracted reminder details: {result}")
+                return result
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON response: {str(e)}")
+                logger.error(f"Raw response: {response_text}")
                 return None
-            
-            logger.info(f"Extracted reminder details: {result}")
-            return result
             
         except Exception as e:
             logger.error(f"Error extracting reminder details: {str(e)}")

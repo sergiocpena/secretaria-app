@@ -141,8 +141,11 @@ class ReminderAgent:
             - "como está o tempo hoje?" → {"is_cancellation": false, "reminder_id": null, "confidence": 0.0}
             """
             
-            # Use OpenAI API directly
-            response = openai.ChatCompletion.create(
+            # Use the new OpenAI API format
+            from openai import OpenAI
+            client = OpenAI()
+            
+            response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -197,8 +200,11 @@ class ReminderAgent:
             - "como está o tempo hoje?" → {"is_list_request": false, "confidence": 0.0}
             """
             
-            # Use OpenAI API directly
-            response = openai.ChatCompletion.create(
+            # Use the new OpenAI API format
+            from openai import OpenAI
+            client = OpenAI()
+            
+            response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},

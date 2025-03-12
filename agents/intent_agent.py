@@ -61,8 +61,11 @@ class IntentAgent:
             
             start_time = time_module.time()
             
-            # Use OpenAI's chat completion directly
-            response = openai.ChatCompletion.create(
+            # Use the new OpenAI API format
+            from openai import OpenAI
+            client = OpenAI()
+            
+            response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},

@@ -44,14 +44,15 @@ class ReminderAgent:
         try:
             logger.info(f"Extracting reminder details from message: '{message[:50]}...' (truncated)")
             
+            # Try a different approach with a more explicit system prompt
             system_prompt = """
             Você é um assistente especializado em extrair detalhes de lembretes de mensagens em português.
             
             Analise a mensagem do usuário e extraia as seguintes informações:
-            - O que deve ser lembrado (texto)
-            - Quando o lembrete deve ser enviado (data e hora)
+            1. O que deve ser lembrado (texto)
+            2. Quando o lembrete deve ser enviado (data e hora)
             
-            Retorne um JSON com o seguinte formato:
+            IMPORTANTE: Sua resposta DEVE ser um JSON válido com o seguinte formato exato:
             {
               "reminder_text": "texto do lembrete",
               "reminder_time": "YYYY-MM-DD HH:MM",
@@ -79,32 +80,70 @@ class ReminderAgent:
             current_date = datetime.now(BRAZIL_TIMEZONE).strftime("%Y-%m-%d")
             system_prompt = system_prompt.format(current_date=current_date)
             
-            # Use the new OpenAI API format
+            # Use the new OpenAI API format with a more reliable model
             from openai import OpenAI
             client = OpenAI()
             
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message}
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"}
-            )
-            
-            # Get the response content
-            response_text = response.choices[0].message.content.strip()
-            
-            # Add better error handling for JSON parsing
+            # First attempt with gpt-4o-mini
             try:
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": message}
+                    ],
+                    temperature=0.1,
+                    response_format={"type": "json_object"}
+                )
+                
+                # Get the response content
+                response_text = response.choices[0].message.content.strip()
+                
+                # Try to parse the JSON
                 result = json.loads(response_text)
                 logger.info(f"Extracted reminder details: {result}")
                 return result
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse JSON response: {str(e)}")
-                logger.error(f"Raw response: {response_text}")
-                return None
+                
+            except (json.JSONDecodeError, Exception) as e:
+                logger.error(f"First attempt failed: {str(e)}")
+                logger.error(f"Raw response: {response_text if 'response_text' in locals() else 'No response'}")
+                
+                # Second attempt with a different approach - use a structured format
+                try:
+                    # Create a more structured prompt for the second attempt
+                    structured_prompt = f"""
+                    Extraia as informações de lembrete da seguinte mensagem: "{message}"
+                    
+                    Responda APENAS com um JSON válido no seguinte formato:
+                    {{
+                      "reminder_text": "texto extraído",
+                      "reminder_time": "YYYY-MM-DD HH:MM",
+                      "confidence": 0.7
+                    }}
+                    
+                    Hoje é {current_date}.
+                    """
+                    
+                    # Try with a different model if available
+                    response2 = client.chat.completions.create(
+                        model="gpt-3.5-turbo",  # Fallback to a different model
+                        messages=[
+                            {"role": "system", "content": "Você é um assistente que extrai informações em formato JSON."},
+                            {"role": "user", "content": structured_prompt}
+                        ],
+                        temperature=0.1,
+                        response_format={"type": "json_object"}
+                    )
+                    
+                    response_text2 = response2.choices[0].message.content.strip()
+                    result = json.loads(response_text2)
+                    logger.info(f"Second attempt extracted reminder details: {result}")
+                    return result
+                    
+                except Exception as e2:
+                    logger.error(f"Second attempt failed: {str(e2)}")
+                    logger.error(f"Raw response: {response_text2 if 'response_text2' in locals() else 'No response'}")
+                    return None
             
         except Exception as e:
             logger.error(f"Error extracting reminder details: {str(e)}")

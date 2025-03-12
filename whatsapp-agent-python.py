@@ -66,7 +66,14 @@ def initialize_openai(api_key):
             logger.error("No OpenAI API key provided")
             return False
         
-        openai.api_key = api_key
+        # Set the API key for the new OpenAI client
+        os.environ["OPENAI_API_KEY"] = api_key
+        
+        # Test the client
+        from openai import OpenAI
+        client = OpenAI()
+        models = client.models.list()
+        
         logger.info("OpenAI client initialized successfully")
         return True
     except Exception as e:

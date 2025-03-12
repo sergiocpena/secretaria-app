@@ -6,7 +6,7 @@ import logging
 import os
 from datetime import datetime
 import pytz
-import openai
+from openai import OpenAI
 
 from agents.general_agent.general_db import store_conversation, get_conversation_history
 
@@ -28,9 +28,11 @@ def get_ai_response(user_message, conversation_history=None, system_prompt=None,
     # Add the user's message
     messages.append({"role": "user", "content": user_message})
     
-    # Use OpenAI API directly
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",  # or whatever model you're using
+    # Use the new OpenAI API format
+    client = OpenAI()
+    
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
         messages=messages,
         temperature=0.7
     )

@@ -95,4 +95,64 @@ class IntentAgent:
             
         except Exception as e:
             logger.error(f"IntentAgent: Error in LLM intent detection: {str(e)}")
-            raise Exception(f"IntentAgent: Error in LLM intent detection: {str(e)}") 
+            raise Exception(f"IntentAgent: Error in LLM intent detection: {str(e)}")
+
+    def detect_intent_with_llm(self, message):
+        """Detect intent using LLM"""
+        try:
+            logger.info(f"IntentAgent: Detecting reminder intent with LLM for message: '{message[:20]}...' (truncated)")
+            
+            # Create the system prompt
+            system_prompt = """
+            Você é um assistente especializado em classificar a intenção de mensagens em português.
+            
+            Analise a mensagem do usuário e determine se é um pedido de:
+            1. Criar um lembrete
+            2. Listar lembretes existentes
+            3. Cancelar um lembrete
+            4. Conversa geral (qualquer outra coisa)
+            
+            Retorne um JSON com o seguinte formato:
+            {
+              "intent": "reminder_create | reminder_list | reminder_cancel | general",
+              "confidence": 0.0 a 1.0
+            }
+            
+            Onde:
+            - "intent": o tipo de intenção detectada
+            - "confidence": sua confiança na classificação (0.0 a 1.0)
+            
+            Exemplos:
+            - "me lembra de pagar a conta amanhã" → {"intent": "reminder_create", "confidence": 0.9}
+            - "quais são meus lembretes?" → {"intent": "reminder_list", "confidence": 0.9}
+            - "cancelar lembrete 2" → {"intent": "reminder_cancel", "confidence": 0.9}
+            - "como está o tempo hoje?" → {"intent": "general", "confidence": 0.9}
+            """
+            
+            # Use the new OpenAI API format
+            from openai import OpenAI
+            client = OpenAI()
+            
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            
+            # Extract the content from the response
+            response_text = response.choices[0].message.content
+            
+            # Parse the JSON response
+            result = json.loads(response_text)
+            
+            logger.info(f"IntentAgent: LLM intent detection result: {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"IntentAgent: Error in LLM intent detection: {str(e)}")
+            # Return a default intent on error
+            return {"intent": "general", "confidence": 0.5} 

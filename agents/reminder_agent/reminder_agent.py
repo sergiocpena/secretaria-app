@@ -79,8 +79,11 @@ class ReminderAgent:
             current_date = datetime.now(BRAZIL_TIMEZONE).strftime("%Y-%m-%d")
             system_prompt = system_prompt.format(current_date=current_date)
             
-            # Use OpenAI API directly
-            response = openai.ChatCompletion.create(
+            # Use the new OpenAI API format
+            from openai import OpenAI
+            client = OpenAI()
+            
+            response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},

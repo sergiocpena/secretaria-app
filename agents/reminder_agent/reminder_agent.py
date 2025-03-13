@@ -83,31 +83,46 @@ class ReminderAgent:
             
             # First attempt with gpt-4o-mini
             try:
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": message}
-                    ],
-                    temperature=0.1,
-                    response_format={"type": "json_object"}
-                )
+                logger.info(f"Sending request to OpenAI with message: '{message[:50]}...'")
+                logger.info(f"Using model: gpt-4o-mini")
                 
-                logger.info(f"Raw response from OpenAI: {response}")
-                # Get the response content
-                response_text = response.choices[0].message.content.strip()
-                logger.info(f"Response from OpenAI converted to text: {response_text}")
-                
-                # Try to parse the JSON
-                result = json.loads(response_text)
-                logger.info(f"Extracted reminder details: {result}")
-                return result
-            except Exception as e:
-                logger.error(f"Error in OpenAI API call: {str(e)}")
-                return None
+                try:
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": message}
+                        ],
+                        temperature=0.1,
+                        response_format={"type": "json_object"}
+                    )
+                    
+                    logger.info(f"Raw response from OpenAI: {response}")
+                    # Get the response content
+                    response_text = response.choices[0].message.content.strip()
+                    logger.info(f"Response from OpenAI converted to text: {response_text}")
+                    
+                    # Try to parse the JSON
+                    result = json.loads(response_text)
+                    logger.info(f"Extracted reminder details: {result}")
+                    return result
+                except openai.APIError as api_err:
+                    logger.error(f"OpenAI API error: {str(api_err)}")
+                    return None
+                except openai.APIConnectionError as conn_err:
+                    logger.error(f"OpenAI API connection error: {str(conn_err)}")
+                    return None
+                except openai.RateLimitError as rate_err:
+                    logger.error(f"OpenAI API rate limit exceeded: {str(rate_err)}")
+                    return None
+                except Exception as e:
+                    logger.error(f"Unexpected error in OpenAI API call: {str(e)}")
+                    logger.error(f"Error type: {type(e).__name__}")
+                    return None
             
         except Exception as e:
             logger.error(f"Error extracting reminder details: {str(e)}")
+            logger.error(f"Error type: {type(e).__name__}")
             return None
     
     def extract_reminder_cancellation(self, message):
